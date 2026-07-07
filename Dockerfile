@@ -30,6 +30,7 @@ ENV PORT=4000
 
 # Bring production node_modules + app source
 COPY --from=prod-deps /app/node_modules ./node_modules
+COPY package.json package-lock.json ./
 COPY src/ ./src/
 
 EXPOSE 4000
