@@ -43,15 +43,17 @@ export function createApp() {
   // frontend URL (or comma-separated list).
   //
   // Common gotchas this parser defends against:
-  //   • Trailing slash   "https://app.com/"   → strip trailing "/"
-  //   • Surrounding quotes  '"https://app.com"' → strip them
-  //   • Trailing comma / whitespace             → trim & filter empties
+  //   • Missing protocol   "app.com"               → prepend "https://"
+  //   • Trailing slash     "https://app.com/"      → strip trailing "/"
+  //   • Surrounding quotes '"https://app.com"'     → strip them
+  //   • Trailing comma / whitespace                → trim & filter empties
   const corsOrigins = (() => {
     const raw = (config.CORS_ORIGIN || '').trim()
     if (!raw || raw === '*') return true
     return raw
       .split(',')
       .map((s) => s.trim().replace(/^["']+|["']+$/g, '').replace(/\/+$/, ''))
+      .map((s) => /^https?:\/\//i.test(s) ? s : `https://${s}`)
       .filter(Boolean)
   })()
   logger.info({ corsOrigins, raw: config.CORS_ORIGIN }, 'cors config')
