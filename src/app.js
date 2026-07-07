@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 
 import { config } from './config.js'
 import { apiRouter } from './routes/index.js'
+import { logger } from './logger.js'
 import { requestLogger } from './middleware/requestLogger.js'
 import { notFound }      from './middleware/notFound.js'
 import { errorHandler }  from './middleware/error.js'
@@ -40,10 +41,22 @@ export function createApp() {
   // reflect any origin in dev. Browsers reject `Access-Control-Allow-Origin: *`
   // combined with `credentials: true`, so production must set CORS_ORIGIN to the
   // frontend URL (or comma-separated list).
+  //
+  // Common gotchas this parser defends against:
+  //   • Trailing slash   "https://app.com/"   → strip trailing "/"
+  //   • Surrounding quotes  '"https://app.com"' → strip them
+  //   • Trailing comma / whitespace             → trim & filter empties
+  const corsOrigins = (() => {
+    const raw = (config.CORS_ORIGIN || '').trim()
+    if (!raw || raw === '*') return true
+    return raw
+      .split(',')
+      .map((s) => s.trim().replace(/^["']+|["']+$/g, '').replace(/\/+$/, ''))
+      .filter(Boolean)
+  })()
+  logger.info({ corsOrigins, raw: config.CORS_ORIGIN }, 'cors config')
   app.use(cors({
-    origin: config.CORS_ORIGIN === '*'
-      ? true
-      : config.CORS_ORIGIN.split(',').map((s) => s.trim()),
+    origin: corsOrigins,
     credentials: true,
   }))
 
