@@ -49,6 +49,10 @@ CREATE TABLE IF NOT EXISTS rooms (
   bathrooms      INTEGER NOT NULL DEFAULT 1,
   size_sqm       NUMERIC(8,2) NOT NULL DEFAULT 0,
   monthly_rent   INTEGER NOT NULL DEFAULT 0,
+  -- geolocation (for map display + future geocoding)
+  lat            NUMERIC(9,6),
+  lng            NUMERIC(9,6),
+  address        TEXT,
   -- availability
   status         TEXT NOT NULL DEFAULT 'available',   -- available | reserved | matched | inactive
   available_from DATE,                                 -- ISO date
@@ -79,7 +83,7 @@ CREATE INDEX IF NOT EXISTS idx_room_images_room ON room_images(room_id, sort_ord
 CREATE TABLE IF NOT EXISTS tenants (
   id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   full_name       TEXT NOT NULL,
-  phone           TEXT NOT NULL,
+  phone           TEXT,                                  -- nullable: Google-only users exist before submitting MatchForm
   email           TEXT,
   line_id         TEXT,
   occupation      TEXT,                                -- student / professional / business owner
@@ -90,6 +94,11 @@ CREATE TABLE IF NOT EXISTS tenants (
   note            TEXT,
   source          TEXT DEFAULT 'website',
   is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+  -- Google OAuth identity (public users)
+  google_sub      TEXT UNIQUE,                          -- Google's stable user id ('sub' claim)
+  email_verified  BOOLEAN NOT NULL DEFAULT FALSE,       -- from Google's 'email_verified' claim
+  picture_url     TEXT,                                  -- from Google's 'picture' claim
+  last_login_at   TIMESTAMPTZ,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -167,9 +176,13 @@ CREATE INDEX IF NOT EXISTS idx_contact_status ON contact_messages(status, create
 -- Internal only — never exposed via /api/public endpoints.
 CREATE TABLE IF NOT EXISTS admins (
   id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  username      TEXT NOT NULL UNIQUE,
+  username      TEXT NOT NULL UNIQUE,                  -- local login (kept live alongside Azure SSO)
   password_hash TEXT NOT NULL,
   is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+  -- Azure AD SSO identity
+  azure_oid     TEXT UNIQUE,                            -- Entra ID stable user id ('oid' claim)
+  display_name  TEXT,                                   -- from Microsoft profile
+  email         TEXT,                                   -- from Microsoft profile
   last_login_at TIMESTAMPTZ,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -182,3 +195,47 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS admin_sessions_expires_idx ON admin_sessions(expires_at);
+
+-- Public-user sessions (parallel to admin_sessions). Used by Google sign-in.
+CREATE TABLE IF NOT EXISTS user_sessions (
+  token       TEXT PRIMARY KEY,
+  tenant_id   INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS user_sessions_expires_idx ON user_sessions(expires_at);
+
+-- ---------- VIEWINGS (วันนัดชมห้อง) ----------
+-- Tenant submits a request for a slot; landlord confirms/declines.
+CREATE TABLE IF NOT EXISTS viewings (
+  id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  room_id       INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  tenant_id     INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  requested_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  scheduled_for TIMESTAMPTZ NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'requested'
+                  CHECK (status IN ('requested','confirmed','declined','completed','cancelled')),
+  note          TEXT,
+  landlord_note TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_viewings_room   ON viewings(room_id, scheduled_for);
+CREATE INDEX IF NOT EXISTS idx_viewings_tenant ON viewings(tenant_id, scheduled_for);
+CREATE INDEX IF NOT EXISTS idx_viewings_status ON viewings(status, scheduled_for);
+
+-- ---------- INQUIRIES (tenant messages to landlord inbox) ----------
+CREATE TABLE IF NOT EXISTS inquiries (
+  id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  room_id     INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  tenant_id   INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  message     TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'new'
+                CHECK (status IN ('new','replied','closed')),
+  reply       TEXT,
+  replied_at  TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_inquiries_room   ON inquiries(room_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_inquiries_tenant ON inquiries(tenant_id, created_at);

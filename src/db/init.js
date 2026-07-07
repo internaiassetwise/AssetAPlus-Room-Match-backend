@@ -26,6 +26,20 @@ async function run() {
   await pool.query(schemaSql)
   console.log('✅  Applied schema.sql')
 
+  // Migrations — additive only. Each file is read, split on `--> statement`,
+  // and applied individually so a syntax error in one migration doesn't tank
+  // the whole init. Files run in lexicographic order.
+  const migrationsDir = path.join(__dirname, 'migrations')
+  if (fs.existsSync(migrationsDir)) {
+    const files = fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()
+    for (const file of files) {
+      console.log(`⏳  Applying migration ${file} …`)
+      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8')
+      await pool.query(sql)
+      console.log(`✅  Applied migration ${file}`)
+    }
+  }
+
   // Seed is NOT fully idempotent — most tables have no natural unique key, so a
   // second run would duplicate rows. Only seed on a fresh DB or when --reset.
   const { rows } = await pool.query('SELECT COUNT(*)::int AS n FROM rooms')

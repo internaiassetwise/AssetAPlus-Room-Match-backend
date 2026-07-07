@@ -66,3 +66,28 @@ export async function destroySession(token) {
 export async function touchLastLogin(adminId) {
   await pool.query('UPDATE admins SET last_login_at = NOW() WHERE id = $1', [adminId])
 }
+
+/**
+ * Insert-or-update an admin keyed by their Azure AD `oid` claim. The admin
+ * table can hold BOTH local-login admins (username/password) and Azure-login
+ * admins (azure_oid) — they live side by side.
+ *
+ * If an admin row already exists for this oid, we refresh email + last_login.
+ * `display_name` is only filled when previously NULL, so manual renames stick.
+ */
+export async function upsertFromAzure({ oid, email, name }) {
+  await pool.query(
+    `INSERT INTO admins (azure_oid, display_name, email, is_active, last_login_at)
+     VALUES ($1, $2, $3, TRUE, NOW())
+     ON CONFLICT (azure_oid) DO UPDATE
+       SET email         = EXCLUDED.email,
+           display_name  = COALESCE(EXCLUDED.display_name, admins.display_name),
+           last_login_at = NOW()`,
+    [oid, name || null, email || null],
+  )
+  const { rows } = await pool.query(
+    'SELECT id, username, display_name, email, azure_oid, is_active FROM admins WHERE azure_oid = $1',
+    [oid],
+  )
+  return rows[0]
+}

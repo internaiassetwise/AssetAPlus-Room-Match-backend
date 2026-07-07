@@ -3,11 +3,13 @@
 import { z } from 'zod'
 
 const schema = z.object({
-  NODE_ENV:     z.enum(['development', 'test', 'production']).default('development'),
-  PORT:         z.coerce.number().int().positive().default(4000),
-  DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
-  CORS_ORIGIN:  z.string().default('*'),
-  LOG_LEVEL:    z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+  NODE_ENV:      z.enum(['development', 'test', 'production']).default('development'),
+  PORT:          z.coerce.number().int().positive().default(4000),
+  DATABASE_URL:  z.string().min(1, 'DATABASE_URL is required'),
+  CORS_ORIGIN:   z.string().default('*'),
+  LOG_LEVEL:     z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+  COOKIE_DOMAIN: z.string().optional(),   // e.g. ".up.railway.app" in prod for cross-subdomain cookies
+  MOCK_AUTH:     z.enum(['true', 'false']).default('false'),  // dev-only mock login flag
 })
 
 const parsed = schema.safeParse(process.env)
