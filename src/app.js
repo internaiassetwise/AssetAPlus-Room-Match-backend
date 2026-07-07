@@ -20,10 +20,20 @@ export function createApp() {
     next()
   })
 
-  // Security headers — but allow inline styles (Tailwind injection) + cross-origin assets
+  // Security headers — but allow inline styles (Tailwind injection) + cross-origin assets.
+  //
+  // Helmet's defaults set CORP/COOP/COEP to `same-origin` to mitigate Spectre-style
+  // side-channel attacks. That's correct for an HTML app served from one origin,
+  // but it BREAKS cross-origin API responses — the browser drops the response body
+  // before JS can read it, and fetch() rejects with "Failed to fetch". Since this
+  // API is consumed from a different origin (frontend on `*.up.railway.app`, API on
+  // `*.up.railway.app` but a different subdomain), we override CORP/COOP/COEP to
+  // permissive values. CORS (configured below) is the real authorization gate.
   app.use(helmet({
     contentSecurityPolicy: false,         // static frontend is separate
     crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginOpenerPolicy: false,
   }))
 
   // CORS — explicit allow-list in production (so cookies can be sent),
