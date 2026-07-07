@@ -44,6 +44,11 @@ export function createApp() {
   // Health is unversioned so uptime monitors can hit it directly
   app.get('/health', (_req, res) => res.json({ ok: true, service: 'room-match-api', ts: Date.now() }))
 
+  // Root — a defensive 200 for platforms (Railway, Render) that probe `/` as a
+  // default healthcheck. Also gives curious humans a useful landing response
+  // instead of a 404 when they curl the base URL.
+  app.get('/', (_req, res) => res.json({ ok: true, service: 'room-match-api', docs: '/api' }))
+
   // All real endpoints under /api
   app.use('/api', apiRouter)
 
