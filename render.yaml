@@ -1,0 +1,33 @@
+# Render Blueprint — one-click deploy of API + PostgreSQL.
+# Render auto-detects render.yaml in the repo and provisions everything.
+#
+# After deploy, set the frontend's VITE_API_BASE to the web service URL.
+
+services:
+  - type: web
+    name: room-match-api
+    runtime: node
+    plan: starter
+    rootDir: .
+    buildCommand: npm install
+    startCommand: node src/db/init.js && node src/server.js
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: room-match-db
+          property: connectionString
+      - key: CORS_ORIGIN
+        sync: false                  # set this in the Render dashboard
+      - key: LOG_LEVEL
+        value: info
+
+databases:
+  - name: room-match-db
+    plan: starter
+    databaseName: room_match
+    user: room_match
+    ipAllowList: []                 # only allow internal + web service

@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+
+# env files (real .env is git-ignored, .env.example is checked in)
+.env
+.env.local
+
+# Postgres data
+.pgdata/
+.dockerdata/
+data/
+
+# logs
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp

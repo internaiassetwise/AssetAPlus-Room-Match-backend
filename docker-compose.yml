@@ -1,0 +1,25 @@
+# Local dev stack: PostgreSQL for the API.
+#
+# Quick start:
+#   docker compose up -d postgres
+#   export DATABASE_URL=postgres://postgres:postgres@localhost:5432/room_match
+#   npm install && npm run db:reset
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: room-match-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB:       room_match
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./.pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d room_match"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
