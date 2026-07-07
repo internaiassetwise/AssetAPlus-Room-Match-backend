@@ -7,6 +7,7 @@ const SELECT_ROOM = `
     r.id, r.landlord_id, r.zone_id, r.title, r.description, r.property_type,
     r.bedrooms, r.bathrooms, r.size_sqm, r.monthly_rent, r.status,
     to_char(r.available_from, 'YYYY-MM-DD') AS available_from,
+    r.lat, r.lng, r.address,
     r.amenities, r.is_featured, r.view_count,
     r.created_at, r.updated_at,
     z.slug AS zone_slug, z.name_th AS zone_name_th,
@@ -15,7 +16,24 @@ const SELECT_ROOM = `
   JOIN zones z ON z.id = r.zone_id
 `
 
-export async function findAvailable({ zone, type, maxRent, minRent, limit = 50 } = {}) {
+/**
+ * List available rooms with optional filters.
+ *
+ * Filters:
+ *   zone, type     — exact match
+ *   minRent/maxRent — inclusive range
+ *   bounds         — "swLat,swLng,neLat,neLng" map viewport bbox
+ *                    (rooms without a lat/lng are excluded when bounds is set)
+ */
+export async function findAvailable({
+  zone, type, maxRent, minRent, bounds, limit = 50,
+} = {}) {
+  // Parse bounds — null when missing or malformed.
+  let b = null
+  if (typeof bounds === 'string' && bounds.includes(',')) {
+    const parts = bounds.split(',').map(Number)
+    if (parts.length === 4 && parts.every(Number.isFinite)) b = parts
+  }
   const { rows } = await query(
     `${SELECT_ROOM}
      WHERE r.status = 'available'
@@ -23,9 +41,24 @@ export async function findAvailable({ zone, type, maxRent, minRent, limit = 50 }
        AND ($2::text IS NULL OR r.property_type = $2)
        AND ($3::int  IS NULL OR r.monthly_rent <= $3)
        AND ($4::int  IS NULL OR r.monthly_rent >= $4)
+       AND ($5::text IS NULL OR (
+             r.lat BETWEEN $6 AND $8
+         AND r.lng BETWEEN $7 AND $9
+       ))
      ORDER BY r.is_featured DESC, r.view_count DESC, r.created_at DESC
-     LIMIT $5`,
-    [zone ?? null, type ?? null, maxRent ?? null, minRent ?? null, Math.min(limit, 200)]
+     LIMIT $10`,
+    [
+      zone ?? null,
+      type ?? null,
+      maxRent ?? null,
+      minRent ?? null,
+      b ? 'set' : null,
+      b ? b[0] : null, // swLat
+      b ? b[1] : null, // swLng
+      b ? b[2] : null, // neLat
+      b ? b[3] : null, // neLng
+      Math.min(limit, 200),
+    ]
   )
   return rows.map(rowToRoom)
 }
@@ -52,17 +85,20 @@ export async function create(input) {
     propertyType, bedrooms, bathrooms, sizeSqm = 0,
     monthlyRent, status = 'available', availableFrom = null,
     amenities = [], isFeatured = false,
+    lat = null, lng = null, address = null,
   } = input
   const { rows } = await query(
     `INSERT INTO rooms (landlord_id, zone_id, title, description, property_type,
                         bedrooms, bathrooms, size_sqm, monthly_rent, status,
-                        available_from, amenities, is_featured)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13)
+                        available_from, amenities, is_featured,
+                        lat, lng, address)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16)
      RETURNING id`,
     [
       landlordId, zoneId, title, description, propertyType,
       bedrooms, bathrooms, sizeSqm ?? 0, monthlyRent, status,
       availableFrom, JSON.stringify(amenities), isFeatured,
+      lat ?? null, lng ?? null, address ?? null,
     ],
   )
   return findById(rows[0].id)
@@ -86,6 +122,9 @@ export async function update(id, fields) {
     status:        'status',
     availableFrom: 'available_from',
     isFeatured:    'is_featured',
+    lat:           'lat',
+    lng:           'lng',
+    address:       'address',
   }
   for (const [k, v] of Object.entries(fields)) {
     if (v === undefined) continue
@@ -111,5 +150,47 @@ export async function update(id, fields) {
 
 export async function remove(id) {
   const res = await query('DELETE FROM rooms WHERE id = $1 RETURNING id', [id])
+  return res.rowCount > 0
+}
+
+// ─── Landlord-scoped ───────────────────────────────────────────────────
+//
+// findByLandlord / createForLandlord / updateForLandlord / deleteForLandlord
+// enforce landlord ownership so the API can't touch other landlords' rooms.
+
+export async function findByLandlord(landlordId) {
+  const { rows } = await query(
+    `${SELECT_ROOM}
+      WHERE r.landlord_id = $1
+      ORDER BY r.created_at DESC`,
+    [landlordId],
+  )
+  return rows.map(rowToRoom)
+}
+
+export async function findOneForLandlord(id, landlordId) {
+  const { rows } = await query(
+    `${SELECT_ROOM} WHERE r.id = $1 AND r.landlord_id = $2`,
+    [id, landlordId],
+  )
+  return rows[0] ? rowToRoom(rows[0]) : null
+}
+
+export async function createForLandlord(input) {
+  return create({ ...input, landlordId: input.landlordId })
+}
+
+export async function updateForLandlord(id, landlordId, fields) {
+  // Make sure the landlord actually owns this room before writing.
+  const own = await findOneForLandlord(id, landlordId)
+  if (!own) return null
+  return update(id, fields)
+}
+
+export async function deleteForLandlord(id, landlordId) {
+  const res = await query(
+    'DELETE FROM rooms WHERE id = $1 AND landlord_id = $2 RETURNING id',
+    [id, landlordId],
+  )
   return res.rowCount > 0
 }

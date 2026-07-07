@@ -14,6 +14,8 @@ const listQuery = z.object({
   type:    z.string().optional(),
   maxRent: z.coerce.number().int().positive().optional(),
   minRent: z.coerce.number().int().nonnegative().optional(),
+  // Comma-separated "swLat,swLng,neLat,neLng". Validated by the repo.
+  bounds:  z.string().optional(),
   limit:   z.coerce.number().int().positive().max(200).optional(),
 })
 

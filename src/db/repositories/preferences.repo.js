@@ -1,8 +1,11 @@
-// src/db/repositories/preferences.repo.js — "ฝากห้อง" form submission.
+// src/db/repositories/preferences.repo.js — "ฝากห้อง / หาห้อง" form submission.
 //
-// Creates a landlord row + a preference row in one transaction so we never end
-// up with an orphaned preference.
+// Landlord flow stays anonymous (a landlord row + a preference row in one tx).
+// Tenant flow splits: profile fields go to tenants.repo.updateTenantProfile,
+// the preferences row is inserted here. Tenant identity already exists —
+// Google sign-in created the row before MatchForm was even submitted.
 import { withTransaction } from '../pool.js'
+import * as tenants from './tenants.repo.js'
 
 /**
  * @param {object} input
@@ -43,39 +46,24 @@ export async function createLandlordPreference(input) {
 }
 
 /**
- * Tenant-side preference. Inserts a tenant row + a preferences row in one
- * transaction (so we never end up with an orphaned preference).
+ * Insert just the `preferences` row for a tenant who already exists
+ * (created earlier via Google OAuth). Profile fields (phone, occupation,
+ * etc.) live on the tenants table and are updated by tenants.repo.
  *
- * @returns {Promise<number>} new tenant id
+ * Wrapped in a tx so a failed INSERT doesn't leave a half-written preference.
+ *
+ * @returns {Promise<number>} new preference id
  */
-export async function createTenantPreference(input) {
+export async function createPreferenceForTenant(tenantId, input) {
   return withTransaction(async (client) => {
-    const { rows: tenantRows } = await client.query(
-      `INSERT INTO tenants
-         (full_name, phone, email, occupation, monthly_income, move_in_date,
-          has_pets, smoker)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING id`,
-      [
-        input.name,
-        input.phone,
-        input.email || null,
-        input.occupation || null,
-        input.monthlyIncome ? Number(input.monthlyIncome) : null,
-        input.moveInDate || null,
-        Boolean(input.hasPets),
-        Boolean(input.smoker),
-      ],
-    )
-    const tenant_id = tenantRows[0].id
-
-    await client.query(
+    const { rows } = await client.query(
       `INSERT INTO preferences
          (tenant_id, role, zone_ids, property_types,
           min_bedrooms, max_bedrooms, min_rent, max_rent, note)
-       VALUES ($1, 'tenant', $2, $3, $4, $5, $6, $7, $8)`,
+       VALUES ($1, 'tenant', $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id`,
       [
-        tenant_id,
+        tenantId,
         input.zone ? String(input.zone) : null,
         input.propertyType ? String(input.propertyType) : null,
         input.minBedrooms != null && input.minBedrooms !== '' ? Number(input.minBedrooms) : null,
@@ -85,6 +73,9 @@ export async function createTenantPreference(input) {
         input.note || null,
       ],
     )
-    return tenant_id
+    return rows[0].id
   })
 }
+
+/** Re-export so callers can update profile fields through one repo surface. */
+export { updateTenantProfile } from './tenants.repo.js'
