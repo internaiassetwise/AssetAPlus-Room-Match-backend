@@ -27,9 +27,13 @@ auth.post('/login', validate({ body: loginBody }), asyncHandler(async (req, res)
   }
   const { token, expiresAt } = await admins.createSession(admin.id)
   await admins.touchLastLogin(admin.id)
+  // In production the frontend and backend often live on different subdomains
+  // (Railway: *.up.railway.app), which the browser treats as cross-site.
+  // sameSite=none + secure is required so cookies survive those requests.
+  // In dev they're same-origin (Vite proxy → :4000), so 'lax' is fine.
   res.cookie(ADMIN_COOKIE, token, {
     httpOnly: true,
-    sameSite: 'lax',
+    sameSite: isProd ? 'none' : 'lax',
     secure: isProd,
     expires: expiresAt,
     path: '/',

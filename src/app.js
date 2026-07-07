@@ -26,12 +26,15 @@ export function createApp() {
     crossOriginEmbedderPolicy: false,
   }))
 
-  // CORS — allow-list when CORS_ORIGIN is set, otherwise * (dev)
+  // CORS — explicit allow-list in production (so cookies can be sent),
+  // reflect any origin in dev. Browsers reject `Access-Control-Allow-Origin: *`
+  // combined with `credentials: true`, so production must set CORS_ORIGIN to the
+  // frontend URL (or comma-separated list).
   app.use(cors({
     origin: config.CORS_ORIGIN === '*'
       ? true
       : config.CORS_ORIGIN.split(',').map((s) => s.trim()),
-    credentials: false,
+    credentials: true,
   }))
 
   app.use(compression())
