@@ -108,7 +108,8 @@ INSERT INTO matches (tenant_id, room_id, status, match_score, agent_note) VALUES
   (1, 4, 'suggested',  88.0, 'ตรง preference'),
   (2, 4, 'contacted',  90.5, 'ผู้เช่าติดต่อกลับแล้ว'),
   (2, 7, 'viewing',    85.0, 'นัดชมห้อง 14/07'),
-  (3, 7, 'suggested',  80.0, 'รายได้ดี');
+  (3, 7, 'suggested',  80.0, 'รายได้ดี')
+ON CONFLICT (tenant_id, room_id) DO NOTHING;
 
 -- ---------- REVIEWS ----------
 INSERT INTO reviews (reviewer_name, reviewer_role, avatar_emoji, rating, body, is_featured) VALUES
