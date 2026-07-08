@@ -1,9 +1,13 @@
 // src/routes/inquiries.js — Tenant → landlord room inbox.
 //
-//   POST /api/inquiries          — tenant sends a message
+//   POST /api/inquiries          — DISABLED: tenant follow-ups go via Line
 //   GET  /api/inquiries?role=landlord — landlord's inbox
 //   GET  /api/inquiries?role=tenant   — tenant's own sent messages
 //   PATCH /api/inquiries/:id     — landlord replies / closes
+//
+// Under the middleman workflow tenants don't send in-app messages — all
+// follow-up goes via Line to admin. Endpoint kept so a stale frontend tab
+// receives a clear 403 instead of a 404.
 
 import { Router } from 'express'
 import { z } from 'zod'
@@ -15,11 +19,6 @@ import { requireUser, requireLandlord } from '../auth/middleware.js'
 
 export const inquiries = Router()
 
-const createBody = z.object({
-  roomId:  z.coerce.number().int().positive('กรุณาระบุห้อง'),
-  message: z.string().trim().min(5, 'กรุณาพิมพ์ข้อความอย่างน้อย 5 ตัวอักษร').max(1000),
-})
-
 const patchBody = z.object({
   reply:   z.string().trim().min(1).max(1000).optional(),
   close:   z.boolean().optional(),
@@ -27,16 +26,13 @@ const patchBody = z.object({
 
 const idParam = z.object({ id: z.coerce.number().int().positive() })
 
-/** Tenant sends a message to a room's landlord. */
-inquiries.post('/', requireUser, validate({ body: createBody }), asyncHandler(async (req, res) => {
-  const room = await repo.findById(req.body.roomId) // reuses join (cheap)
-  if (!room) throw new AppError(404, 'ROOM_NOT_FOUND', 'ไม่พบห้องนี้')
-  const item = await repo.create({
-    roomId:   req.body.roomId,
-    tenantId: req.user.id,
-    message:  req.body.message,
-  })
-  res.status(201).json(item)
+/** Tenants contact admin via Line; no in-app messages. */
+inquiries.post('/', requireUser, asyncHandler(async (_req, _res) => {
+  throw new AppError(
+    403,
+    'CONTACT_ADMIN',
+    'กรุณาติดต่อแอดมินผ่าน Line เพื่อสอบถามเพิ่มเติม',
+  )
 }))
 
 /** List inquiries for the caller. */

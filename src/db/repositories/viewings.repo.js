@@ -100,3 +100,20 @@ export async function countUpcomingForLandlord(landlordId) {
   )
   return rows[0].n
 }
+
+/**
+ * Public read of confirmed + future viewings for a single room. Used by the
+ * RoomDetail page's <AvailableViewingDates> so anyone (signed in or not)
+ * browsing the room can see the dates admin has set.
+ */
+export async function findForRoomPublic(roomId) {
+  const { rows } = await query(
+    `${SELECT_BASE}
+      WHERE v.room_id = $1
+        AND v.status = 'confirmed'
+        AND v.scheduled_for >= NOW()
+      ORDER BY v.scheduled_for ASC`,
+    [roomId],
+  )
+  return rows
+}

@@ -1,9 +1,13 @@
 // src/routes/viewings.js — Tenant-facing calendar (วันนัดชมห้อง) API.
 //
-//   POST /api/viewings             — tenant schedules a viewing
+//   POST /api/viewings             — DISABLED: tenants request viewings via Line
 //   GET  /api/viewings?role=tenant  — tenant's own viewings
 //   GET  /api/viewings?role=landlord — landlord's incoming requests
 //   PATCH /api/viewings/:id        — landlord confirm/decline, tenant cancel
+//
+// Under the middleman workflow, dates are set by admin (e.g. via the Line
+// chatbot) and tenants contact admin to request a slot. The endpoint stays
+// mounted so a stale frontend tab gets a clear 403 instead of a 404.
 
 import { Router } from 'express'
 import { z } from 'zod'
@@ -15,13 +19,6 @@ import { requireUser, requireLandlord } from '../auth/middleware.js'
 
 export const viewings = Router()
 
-const createBody = z.object({
-  roomId:       z.coerce.number().int().positive('กรุณาระบุห้อง'),
-  scheduledFor: z.string().datetime({ message: 'วันเวลาไม่ถูกต้อง (ISO 8601)' })
-                  .or(z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/, 'รูปแบบวันเวลาไม่ถูกต้อง')),
-  note:         z.string().trim().max(500).optional().or(z.literal('')),
-})
-
 const patchBody = z.object({
   status:        z.enum(['confirmed', 'declined', 'completed', 'cancelled']).optional(),
   landlordNote:  z.string().trim().max(500).optional().or(z.literal('')),
@@ -31,30 +28,38 @@ const patchBody = z.object({
 const idParam = z.object({ id: z.coerce.number().int().positive() })
 
 /**
- * Tenant creates a viewing request.
- *   body: { roomId, scheduledFor, note }
- *   Identity: from requireUser → req.user.id (skip in MOCK mode).
+ * Tenants request viewings via Line — they do not self-book in the app.
+ * Endpoint kept so a stale frontend tab receives a clear 403 CONTACT_ADMIN.
  */
-viewings.post('/', requireUser, validate({ body: createBody }), asyncHandler(async (req, res) => {
-  const room = await repo.findById(req.body.roomId)
-  if (!room) throw new AppError(404, 'ROOM_NOT_FOUND', 'ไม่พบห้องนี้')
-  const viewing = await repo.createRequest({
-    roomId:       req.body.roomId,
-    tenantId:     req.user.id,
-    scheduledFor: req.body.scheduledFor,
-    note:         req.body.note,
-  })
-  res.status(201).json(viewing)
+viewings.post('/', requireUser, asyncHandler(async (_req, _res) => {
+  throw new AppError(
+    403,
+    'CONTACT_ADMIN',
+    'การนัดชมห้องต้องติดต่อแอดมินทาง Line เพื่อยืนยันวันเวลา',
+  )
 }))
 
 /**
  * List viewings for the caller.
- *   ?role=tenant    → requireUser, shows own
- *   ?role=landlord  → requireLandlord, shows incoming
+ *   ?role=tenant           → requireUser, shows own
+ *   ?role=landlord         → requireLandlord, shows incoming
+ *   ?roomId=<id>&public=1  → PUBLIC: confirmed + future viewings for one room
+ *                            (no auth required — used by RoomDetail to display
+ *                            admin-set viewing dates to anyone browsing)
  */
 viewings.get('/', asyncHandler(async (req, res) => {
   const role = String(req.query.role || 'tenant')
   const status = req.query.status ? String(req.query.status) : undefined
+
+  // Public per-room read for AvailableViewingDates on RoomDetail.
+  if (req.query.roomId && String(req.query.public) === '1') {
+    const roomId = Number(req.query.roomId)
+    if (!Number.isInteger(roomId) || roomId <= 0) {
+      throw new AppError(400, 'BAD_ROOM_ID', 'ระบุ roomId ไม่ถูกต้อง')
+    }
+    const items = await repo.findForRoomPublic(roomId)
+    return res.json(items)
+  }
 
   if (role === 'landlord') {
     const { requireLandlord: rl } = await import('../auth/middleware.js')

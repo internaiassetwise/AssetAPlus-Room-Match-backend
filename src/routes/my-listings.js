@@ -2,11 +2,13 @@
 //
 //   GET    /api/my-listings       — list
 //   GET    /api/my-listings/:id   — single
-//   POST   /api/my-listings       — create (landlord_id from session)
-//   PATCH  /api/my-listings/:id   — update (only own rooms)
+//   POST   /api/my-listings       — DISABLED: landlords contact admin via Line to list
+//   PATCH  /api/my-listings/:id   — update own rooms; `description` is admin-only (stripped)
 //   DELETE /api/my-listings/:id   — delete (only own rooms)
 //
 // Mirrors the admin rooms CRUD but uses requireLandlord + landlord_id scoping.
+// Under the middleman workflow landlords do not self-list rooms and do not edit
+// the room description themselves; admin handles both via the Line chatbot.
 
 import { Router } from 'express'
 import { z } from 'zod'
@@ -51,20 +53,28 @@ myListings.get('/:id', requireLandlord, validate({ params: idParam }),
   }),
 )
 
-myListings.post('/', requireLandlord, validate({ body: writeBody }),
-  asyncHandler(async (req, res) => {
-    const room = await repo.createForLandlord({
-      ...req.body,
-      landlordId: req.landlord.id,
-    })
-    res.status(201).json(room)
-  }),
-)
+// Landlords contact admin via Line to list rooms. The endpoint stays mounted
+// so a stale frontend tab that still calls it gets a clear 403 instead of a
+// 404 (which would suggest "wrong URL").
+myListings.post('/', requireLandlord, asyncHandler(async (_req, _res) => {
+  throw new AppError(
+    403,
+    'CONTACT_ADMIN',
+    'การลงประกาศห้องต้องทำผ่านแอดมินทาง Line เท่านั้น',
+  )
+}))
 
 myListings.patch('/:id', requireLandlord,
   validate({ params: idParam, body: writeBody.partial() }),
   asyncHandler(async (req, res) => {
-    const updated = await repo.updateForLandlord(req.params.id, req.landlord.id, req.body)
+    // Description is admin-only — silently strip it from the payload so the
+    // rest of the landlord's edits still go through. Set a response header
+    // so the frontend (if it ever needs to detect this) can show a notice.
+    const { description: _ignored, ...rest } = req.body
+    if ('description' in req.body) {
+      res.setHeader('X-Description-Admin-Only', 'true')
+    }
+    const updated = await repo.updateForLandlord(req.params.id, req.landlord.id, rest)
     if (!updated) throw new AppError(404, 'ROOM_NOT_FOUND', 'ไม่พบห้องนี้')
     res.json(updated)
   }),
