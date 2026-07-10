@@ -80,12 +80,12 @@ export function createApp() {
     fallthrough: true,
   }))
 
-  // Static /images — demo/seed room photos. room_images.url stores these as
+  // Static /images — demo/seed room photos shipped WITH the backend
+  // (public/images/, so they deploy to Railway). room_images.url stores these as
   // relative "/images/<file>" paths; the backend serves them so Line Flex cards
-  // (the room-detail card's hero) can fetch them over the public APP_BASE_URL
-  // origin (Line requires absolute https image URLs). Files live at the
-  // repo-root images/ dir (server cwd is server/, so ../images resolves there).
-  app.use('/images', express.static(path.join(process.cwd(), '..', 'images'), {
+  // can fetch them over the public APP_BASE_URL origin (Line requires absolute
+  // https image URLs).
+  app.use('/images', express.static(path.join(process.cwd(), 'public', 'images'), {
     maxAge: '7d',
     fallthrough: true,
   }))
