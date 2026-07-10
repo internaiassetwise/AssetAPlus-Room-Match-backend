@@ -3,6 +3,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import * as repo from '../db/repositories/rooms.repo.js'
 import * as slotsRepo from '../db/repositories/viewingSlots.repo.js'
+import * as roomImages from '../db/repositories/roomImages.repo.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate } from '../middleware/validate.js'
 import { AppError } from '../middleware/AppError.js'
@@ -57,7 +58,10 @@ rooms.get('/:id', validate({ params: idParam }), asyncHandler(async (req, res) =
   const room = await repo.findById(req.params.id)
   if (!room) throw new AppError(404, 'ROOM_NOT_FOUND', 'ไม่พบห้องนี้')
   await repo.bumpViewCount(req.params.id)
-  res.json(room)
+  // Attach the full photo gallery (room_images, sorted). `room.image` is only
+  // the first photo; the gallery + lightbox need the whole set.
+  const photos = (await roomImages.findByRoom(req.params.id)).map((p) => p.url)
+  res.json({ ...room, photos })
 }))
 
 // ----- Viewing slots (Phase 6) ---------------------------------------------
