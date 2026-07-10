@@ -67,3 +67,35 @@ export async function updateTenantProfile(tenantId, {
     ],
   )
 }
+
+/**
+ * Look up a tenant by their Line userId. Returns null if absent.
+ * Used by the .NET chat bot when a tenant books a viewing through chat.
+ */
+export async function findByLineId(lineUserId) {
+  if (!lineUserId) return null
+  const { rows } = await pool.query(
+    'SELECT * FROM tenants WHERE line_id = $1',
+    [lineUserId],
+  )
+  return rows[0] || null
+}
+
+/**
+ * Create a stub tenant row from a Line userId. The bot can book viewings /
+ * receive inquiries before the tenant has filled in name + phone. Admin
+ * (or the tenant via the web app later) fills in the real values later.
+ *
+ * full_name is NOT NULL in the schema; we use a placeholder derived from
+ * the lineUserId until the tenant completes their profile.
+ */
+export async function createFromBot(lineUserId) {
+  const stubName = `Line user ${lineUserId.slice(0, 8)}`
+  const { rows } = await pool.query(
+    `INSERT INTO tenants (full_name, line_id, source)
+     VALUES ($1, $2, 'line-bot')
+     RETURNING *`,
+    [stubName, lineUserId],
+  )
+  return rows[0]
+}

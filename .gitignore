@@ -1,9 +1,11 @@
 # dependencies
 node_modules/
 
-# env files (real .env is git-ignored, .env.example is checked in)
+# env files — ignore ALL variants (.env, .env.local, .env.bak, …) except templates.
+# NEVER commit real secrets.
 .env
-.env.local
+.env.*
+!.env.example
 
 # Postgres data
 .pgdata/

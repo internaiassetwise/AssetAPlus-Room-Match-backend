@@ -15,11 +15,15 @@ export function rowToRoom(row) {
     price: row.monthly_rent,
     status: row.status,
     availableFrom: row.available_from,
+    address: row.address ?? null,
     zone: row.zone_name_th,
     zoneId: row.zone_id,
     image: row.image_url,
     amenities,
     isFeatured: row.is_featured === true,
+    createdByLineUserId: row.created_by_line_user_id ?? null,
+    approvedAt: row.approved_at ?? null,
+    approvedBy: row.approved_by ?? null,
     badge: row.is_featured
       ? 'ยอดนิยม'
       : row.status === 'available'

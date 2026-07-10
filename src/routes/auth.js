@@ -20,9 +20,11 @@
 
 import { Router } from 'express'
 import { z } from 'zod'
+import { randomUUID } from 'node:crypto'
 import * as oidc from 'openid-client'
 import * as admins           from '../db/repositories/admins.repo.js'
 import * as tenants          from '../db/repositories/tenants.repo.js'
+import * as landlords        from '../db/repositories/landlords.repo.js'
 import * as userSessions     from '../db/repositories/userSessions.repo.js'
 import * as landlordSessions from '../db/repositories/landlordSessions.repo.js'
 import { asyncHandler }        from '../middleware/_asyncHandler.js'
@@ -36,6 +38,7 @@ import {
   sessionCookieOptions,
 } from '../auth/sessions.js'
 import { config } from '../config.js'
+import { logger } from '../logger.js'
 
 export const auth = Router()
 
@@ -183,6 +186,145 @@ auth.get('/user/me', asyncHandler(async (req, res) => {
     picture: session.picture_url,
     role:    'tenant',
   })
+}))
+
+// ─────────────────────────── Line Login (public users) ──────────────────────
+//
+// One LINE Login channel serves BOTH tenants and landlords (and the LIFF listing
+// form). Flow:
+//   GET /auth/line/start?role=tenant|landlord&return=/path
+//     → 302 to Line's consent screen (state + role + return in short-lived cookies)
+//   GET /auth/line/callback?code=&state=
+//     → exchange code → fetch Line profile → findByLineId in BOTH tables → set
+//       user_session and/or landlord_session (a user can hold both roles) → redirect.
+//
+// The ?role= hint only decides which stub to seed for a BRAND-NEW user (no row in
+// either table). Returning users get a session for every role they already have,
+// so a landlord who also rents sees both portals after one login.
+
+const LINE_AUTHORIZE_URL = 'https://access.line.me/oauth2/v2.1/authorize'
+const LINE_TOKEN_URL     = 'https://api.line.me/oauth2/v2.1/token'
+const LINE_PROFILE_URL   = 'https://api.line.me/v2/profile'
+
+function lineLoginConfigured() {
+  return !!(config.LINE_LOGIN_CHANNEL_ID && config.LINE_LOGIN_CHANNEL_SECRET && config.LINE_LOGIN_REDIRECT_URI)
+}
+
+/**
+ * Build an absolute URL on the FRONTEND origin (the React app), used for the
+ * post-OAuth redirect. The callback runs on the backend origin, so a relative
+ * redirect would land on the API instead of the app. Falls back to a relative
+ * path when no web origin is configured (same-origin deploys).
+ */
+function frontendUrl(path) {
+  const origin = (config.WEB_BASE_URL || config.APP_BASE_URL || '').replace(/\/+$/, '')
+  const p = path.startsWith('/') ? path : `/${path}`
+  return origin ? `${origin}${p}` : p
+}
+
+auth.get('/line/start', asyncHandler(async (req, res) => {
+  if (!lineLoginConfigured()) {
+    return res.status(503).json({
+      ok: false,
+      error: { code: 'PROVIDER_NOT_CONFIGURED', message: 'Line Login is not configured yet' },
+    })
+  }
+  const role     = req.query.role === 'landlord' ? 'landlord' : 'tenant'
+  const returnTo = sanitizeReturn(req.query.return)
+  const state    = randomUUID()
+
+  const authUrl = new URL(LINE_AUTHORIZE_URL)
+  authUrl.searchParams.set('response_type', 'code')
+  authUrl.searchParams.set('client_id',     config.LINE_LOGIN_CHANNEL_ID)
+  authUrl.searchParams.set('redirect_uri',  config.LINE_LOGIN_REDIRECT_URI)
+  authUrl.searchParams.set('state',         state)
+  // 'profile' is enough — it returns the stable userId (our line_id key) plus
+  // displayName/picture via /v2/profile. We deliberately do NOT request 'email':
+  // LINE gates it behind a channel permission that can need review, and we don't
+  // use it (identity = line_id).
+  authUrl.searchParams.set('scope',         'profile openid')
+  authUrl.searchParams.set('ui_locales',    'th')
+
+  oidcCookieStore.set(res, req)('oidc_state',     state)
+  oidcCookieStore.set(res, req)('oidc_role',      role)
+  oidcCookieStore.set(res, req)('oidc_return_to', returnTo)
+  flushOidcCookies(req, res)
+  res.redirect(authUrl.href)
+}))
+
+auth.get('/line/callback', asyncHandler(async (req, res) => {
+  if (!lineLoginConfigured()) throw new AppError(503, 'PROVIDER_NOT_CONFIGURED', 'Line Login is not configured yet')
+
+  // CSRF: the state Line echoed back must match the one we set at /start.
+  const expectedState = readCookie(req, 'oidc_state')
+  if (!expectedState || req.query.state !== expectedState) {
+    throw new AppError(400, 'AUTH_BAD_STATE', 'Line login state mismatch — please try again')
+  }
+  const role     = readCookie(req, 'oidc_role') === 'landlord' ? 'landlord' : 'tenant'
+  const returnTo = readCookie(req, 'oidc_return_to') || '/'
+
+  const clearOidc = () => {
+    res.clearCookie('oidc_state',     { path: '/' })
+    res.clearCookie('oidc_role',      { path: '/' })
+    res.clearCookie('oidc_return_to', { path: '/' })
+  }
+
+  // User declined, or Line returned an error — bounce back to the login page.
+  if (req.query.error) {
+    clearOidc()
+    return res.redirect(frontendUrl('/login?line_error=1'))
+  }
+
+  // Exchange the auth code for an access token (confidential client: the channel
+  // secret stays server-side, so no PKCE needed).
+  const tokenRes = await fetch(LINE_TOKEN_URL, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body:    new URLSearchParams({
+      grant_type:    'authorization_code',
+      code:          req.query.code,
+      redirect_uri:  config.LINE_LOGIN_REDIRECT_URI,
+      client_id:     config.LINE_LOGIN_CHANNEL_ID,
+      client_secret: config.LINE_LOGIN_CHANNEL_SECRET,
+    }),
+  })
+  if (!tokenRes.ok) {
+    logger.error({ status: tokenRes.status, body: await tokenRes.text().catch(() => '') }, 'line token exchange failed')
+    throw new AppError(502, 'LINE_TOKEN_FAILED', 'Line login failed at token exchange')
+  }
+  const tokens = await tokenRes.json()
+
+  // Fetch the stable Line userId (+ display name / picture for future use).
+  const profRes = await fetch(LINE_PROFILE_URL, {
+    headers: { Authorization: `Bearer ${tokens.access_token}` },
+  })
+  if (!profRes.ok) throw new AppError(502, 'LINE_PROFILE_FAILED', 'Line login failed at profile fetch')
+  const profile = await profRes.json()
+  const lineUserId = profile.userId
+  if (!lineUserId) throw new AppError(502, 'LINE_NO_USER', 'Line did not return a user id')
+
+  // Link the Line identity to tenant and/or landlord rows. A user can be both,
+  // so we look in BOTH tables and set a session for every row that exists. The
+  // ?role= hint only seeds a stub when the user is brand-new.
+  let tenant   = await tenants.findByLineId(lineUserId)
+  let landlord = await landlords.findByLineId(lineUserId)
+  if (!tenant && !landlord) {
+    if (role === 'landlord') landlord = await landlords.createFromBot(lineUserId)
+    else                     tenant   = await tenants.createFromBot(lineUserId)
+  }
+
+  if (tenant) {
+    const s = await userSessions.createUserSession(tenant.id)
+    setSessionCookie(res, USER_COOKIE, s.token, s.expiresAt)
+  }
+  if (landlord) {
+    const s = await landlordSessions.createLandlordSession(landlord.id)
+    setSessionCookie(res, LANDLORD_COOKIE, s.token, s.expiresAt)
+  }
+
+  logger.info({ lineUserId, tenant: !!tenant, landlord: !!landlord }, 'line login succeeded')
+  clearOidc()
+  res.redirect(frontendUrl(returnTo))
 }))
 
 // ───────────────────────────── Azure OIDC (admin) ────────────────────────────

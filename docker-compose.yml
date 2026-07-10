@@ -4,10 +4,18 @@
 #   docker compose up -d postgres
 #   export DATABASE_URL=postgres://postgres:postgres@localhost:5432/room_match
 #   npm install && npm run db:reset
+#
+# We use `pgvector/pgvector:pg16` (not the bare `postgres:16-alpine`) so the
+# pgvector extension is available — the FAQ knowledge base stores 768-dim
+# Gemini embeddings in a `vector(768)` column. If you already have data in
+# `postgres:16-alpine` and want to keep it, you can either:
+#   1) `docker compose down -v` and start fresh with the pgvector image, or
+#   2) keep postgres:16-alpine and `apt-get install postgresql-16-pgvector`
+#      inside the container, then `CREATE EXTENSION vector;` will work.
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: room-match-postgres
     restart: unless-stopped
     environment:

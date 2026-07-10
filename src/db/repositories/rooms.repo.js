@@ -10,6 +10,7 @@ const SELECT_ROOM = `
     r.lat, r.lng, r.address,
     r.amenities, r.is_featured, r.view_count,
     r.created_at, r.updated_at,
+    r.created_by_line_user_id, r.approved_at, r.approved_by,
     z.slug AS zone_slug, z.name_th AS zone_name_th,
     (SELECT url FROM room_images WHERE room_id = r.id ORDER BY sort_order LIMIT 1) AS image_url
   FROM rooms r
@@ -26,7 +27,7 @@ const SELECT_ROOM = `
  *                    (rooms without a lat/lng are excluded when bounds is set)
  */
 export async function findAvailable({
-  zone, type, maxRent, minRent, bounds, limit = 50,
+  zone, type, maxRent, minRent, beds, bounds, limit = 50,
 } = {}) {
   // Parse bounds — null when missing or malformed.
   let b = null
@@ -41,23 +42,25 @@ export async function findAvailable({
        AND ($2::text IS NULL OR r.property_type = $2)
        AND ($3::int  IS NULL OR r.monthly_rent <= $3)
        AND ($4::int  IS NULL OR r.monthly_rent >= $4)
-       AND ($5::text IS NULL OR (
-             r.lat BETWEEN $6 AND $8
-         AND r.lng BETWEEN $7 AND $9
+       AND ($5::int  IS NULL OR r.bedrooms >= $5)
+       AND ($6::text IS NULL OR (
+             r.lat BETWEEN $7 AND $9
+         AND r.lng BETWEEN $8 AND $10
        ))
      ORDER BY r.is_featured DESC, r.view_count DESC, r.created_at DESC
-     LIMIT $10`,
+     LIMIT $11`,
     [
-      zone ?? null,
-      type ?? null,
-      maxRent ?? null,
-      minRent ?? null,
-      b ? 'set' : null,
-      b ? b[0] : null, // swLat
-      b ? b[1] : null, // swLng
-      b ? b[2] : null, // neLat
-      b ? b[3] : null, // neLng
-      Math.min(limit, 200),
+      zone ?? null,            // $1 zone slug
+      type ?? null,            // $2 property_type
+      maxRent ?? null,         // $3
+      minRent ?? null,         // $4
+      beds ?? null,            // $5 minimum bedrooms (>=)
+      b ? 'set' : null,        // $6 bounds sentinel
+      b ? b[0] : null,         // $7 swLat
+      b ? b[1] : null,         // $8 swLng
+      b ? b[2] : null,         // $9 neLat
+      b ? b[3] : null,         // $10 neLng
+      Math.min(limit, 200),    // $11
     ]
   )
   return rows.map(rowToRoom)
@@ -193,4 +196,91 @@ export async function deleteForLandlord(id, landlordId) {
     [id, landlordId],
   )
   return res.rowCount > 0
+}
+
+// ─── Bot / pending-listing helpers (Phase 4) ────────────────────────────
+//
+// Landlord drafts created through the Line bot start at status='pending' and
+// stay invisible to the webapp until an admin approves them (Phase 5).
+
+/**
+ * Create a room with status='pending' on behalf of a landlord. The landlord
+ * (find-or-create stub) and zone (numeric id) are resolved upstream by the
+ * createRoomDraft tool; this function just inserts. Returns the new room.
+ */
+export async function createPending({
+  landlordId, zoneId, title, description = '', propertyType,
+  bedrooms, bathrooms, sizeSqm = 0, monthlyRent, availableFrom = null,
+  amenities = [], address = null, lat = null, lng = null,
+  createdByLineUserId = null,
+}) {
+  const { rows } = await query(
+    `INSERT INTO rooms (landlord_id, zone_id, title, description, property_type,
+                        bedrooms, bathrooms, size_sqm, monthly_rent, status,
+                        available_from, amenities, is_featured, lat, lng, address,
+                        created_by_line_user_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11::jsonb,false,$12,$13,$14,$15)
+     RETURNING id`,
+    [
+      landlordId, zoneId, title, description, propertyType,
+      bedrooms, bathrooms, sizeSqm ?? 0, monthlyRent,
+      availableFrom, JSON.stringify(amenities), lat ?? null, lng ?? null, address ?? null,
+      createdByLineUserId ?? null,
+    ],
+  )
+  return findById(rows[0].id)
+}
+
+/**
+ * Most recent pending draft created by a Line landlord. Used by the image
+ * path to attach photos to the draft the landlord just submitted.
+ */
+export async function findPendingByLineUser(lineUserId) {
+  if (!lineUserId) return null
+  const { rows } = await query(
+    `${SELECT_ROOM}
+      WHERE r.created_by_line_user_id = $1 AND r.status = 'pending'
+      ORDER BY r.created_at DESC
+      LIMIT 1`,
+    [lineUserId],
+  )
+  return rows[0] ? rowToRoom(rows[0]) : null
+}
+
+// ─── Admin approval flow (Phase 5) ──────────────────────────────────────
+
+/** All pending listings (bot-submitted, awaiting admin), newest first. */
+export async function findPending({ limit = 100 } = {}) {
+  const { rows } = await query(
+    `${SELECT_ROOM} WHERE r.status = 'pending' ORDER BY r.created_at DESC LIMIT $1`,
+    [Math.min(limit, 200)],
+  )
+  return rows.map(rowToRoom)
+}
+
+/**
+ * Approve a pending listing → status='available' + stamp who approved.
+ * Returns the refreshed room (with createdByLineUserId for the push) or null
+ * if the room isn't pending (already handled / doesn't exist).
+ */
+export async function approve(id, approver) {
+  const { rowCount } = await query(
+    `UPDATE rooms
+        SET status = 'available', approved_at = NOW(), approved_by = $2, updated_at = NOW()
+      WHERE id = $1 AND status = 'pending'`,
+    [id, approver],
+  )
+  if (rowCount === 0) return null
+  return findById(id)
+}
+
+/** Reject a pending listing → status='removed' (kept for audit, hidden). */
+export async function reject(id) {
+  const { rowCount } = await query(
+    `UPDATE rooms SET status = 'removed', updated_at = NOW()
+      WHERE id = $1 AND status = 'pending'`,
+    [id],
+  )
+  if (rowCount === 0) return null
+  return findById(id)
 }

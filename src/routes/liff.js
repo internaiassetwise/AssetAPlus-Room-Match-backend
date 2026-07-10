@@ -1,0 +1,295 @@
+// src/routes/liff.js — LIFF listing form (Feature C).
+//
+//   GET  /listing        — the fillable form served as HTML (opened inside Line
+//                          via the createRoomDraft Flex card). Loads the LIFF
+//                          SDK, reads the landlord's Line userId, and POSTs the
+//                          same-origin FormData below.
+//   POST /listing/submit — receives the form (multipart, photos included),
+//                          find-or-creates the landlord, resolves the zone,
+//                          inserts a status='pending' room, and saves photos.
+//                          Mirrors the bot photo path in my-listings.js.
+//
+// Mounted unversioned (/api/liff) AND versioned (/api/v1/liff) in routes/index.js.
+
+import { Router } from 'express'
+import multer from 'multer'
+import { asyncHandler } from '../middleware/_asyncHandler.js'
+import { AppError }     from '../middleware/AppError.js'
+import { config } from '../config.js'
+import * as landlords   from '../db/repositories/landlords.repo.js'
+import { findByName }   from '../db/repositories/zones.repo.js'
+import * as rooms       from '../db/repositories/rooms.repo.js'
+import * as roomImages  from '../db/repositories/roomImages.repo.js'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import crypto from 'node:crypto'
+
+export const liff = Router()
+
+// multer in-memory so the handler can persist each photo itself. Mirrors
+// my-listings.js: 10 MB cap per image, images only.
+const photoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) {
+      return cb(new AppError(400, 'BAD_MIME', 'ต้องเป็นไฟล์รูปภาพ'))
+    }
+    cb(null, true)
+  },
+})
+
+/**
+ * Render the listing form. The LIFF id and submit URL are injected from the
+ * server so the page works whether it is served at /api/liff or /api/v1/liff.
+ */
+function renderListingHtml(liffId, submitUrl) {
+  return `<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ลงประกาศห้อง — Room Match</title>
+  <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Sarabun", sans-serif;
+      background: #F4F6F8;
+      color: #1A1A1A;
+      padding: 16px;
+    }
+    .wrap { max-width: 520px; margin: 0 auto; }
+    h1 { font-size: 20px; margin: 8px 0 4px; }
+    .sub { color: #6B7280; font-size: 13px; margin: 0 0 16px; }
+    .card {
+      background: #fff;
+      border-radius: 14px;
+      padding: 18px 16px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    }
+    label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; }
+    .opt { font-weight: 400; color: #9CA3AF; }
+    input, select, textarea {
+      width: 100%; padding: 10px 12px; font-size: 15px;
+      border: 1px solid #D1D5DB; border-radius: 10px; background: #fff;
+    }
+    textarea { resize: vertical; min-height: 80px; }
+    .row { display: flex; gap: 12px; }
+    .row > div { flex: 1; }
+    input[type="file"] { padding: 8px; }
+    .btn {
+      margin-top: 18px; width: 100%; padding: 13px;
+      background: #1F4068; color: #fff; border: none; border-radius: 10px;
+      font-size: 16px; font-weight: 600; cursor: pointer;
+    }
+    .btn:disabled { background: #9CA3AF; cursor: not-allowed; }
+    .status { display: none; margin-top: 14px; padding: 12px; border-radius: 10px; font-size: 14px; }
+    .status.success { background: #ECFDF5; color: #065F46; display: block; }
+    .status.error { background: #FEF2F2; color: #991B1B; display: block; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>ลงประกาศห้องของคุณ</h1>
+    <p class="sub">กรอกข้อมูลแล้วกดส่ง แอดมินจะตรวจสอบและอนุมัติให้ค่ะ</p>
+    <form id="listingForm" class="card">
+      <input type="hidden" id="lineUserId" name="lineUserId" value="" />
+
+      <label for="title">ชื่อห้อง</label>
+      <input id="title" name="title" type="text" required placeholder="เช่น คอนโด ใกล้ BTS" />
+
+      <label for="zone">ย่าน</label>
+      <input id="zone" name="zone" type="text" required placeholder="เช่น อ่อนนุก" />
+
+      <label for="propertyType">ประเภท</label>
+      <select id="propertyType" name="propertyType">
+        <option value="condo">คอนโด</option>
+        <option value="house">บ้าน</option>
+        <option value="townhouse">ทาวน์เฮ้าส์</option>
+        <option value="apartment">อพาร์ตเมนต์</option>
+        <option value="studio">สตูดิโอ</option>
+      </select>
+
+      <div class="row">
+        <div>
+          <label for="bedrooms">ห้องนอน</label>
+          <input id="bedrooms" name="bedrooms" type="number" min="0" required value="1" />
+        </div>
+        <div>
+          <label for="bathrooms">ห้องน้ำ</label>
+          <input id="bathrooms" name="bathrooms" type="number" min="0" required value="1" />
+        </div>
+      </div>
+
+      <label for="sizeSqm">พื้นที่ตร.ม. <span class="opt">(ไม่จำเป็น)</span></label>
+      <input id="sizeSqm" name="sizeSqm" type="number" min="0" step="0.01" />
+
+      <label for="monthlyRent">ค่าเช่า/เดือน (บาท)</label>
+      <input id="monthlyRent" name="monthlyRent" type="number" min="1000" step="100" required />
+
+      <label for="address">ที่อยู่ <span class="opt">(ไม่จำเป็น)</span></label>
+      <input id="address" name="address" type="text" />
+
+      <label for="description">รายละเอียด <span class="opt">(ไม่จำเป็น)</span></label>
+      <textarea id="description" name="description"></textarea>
+
+      <label for="photos">รูปห้อง <span class="opt">(เลือกได้หลายรูป)</span></label>
+      <input id="photos" name="photos" type="file" accept="image/*" multiple />
+
+      <button class="btn" id="submitBtn" type="submit">ส่งประกาศ</button>
+    </form>
+    <div id="status" class="status"></div>
+  </div>
+
+  <script>
+    var LIFF_ID = ${JSON.stringify(liffId || '')};
+    var SUBMIT_URL = ${JSON.stringify(submitUrl)};
+    var form = document.getElementById('listingForm');
+    var statusEl = document.getElementById('status');
+    var submitBtn = document.getElementById('submitBtn');
+
+    function showStatus(msg, isError) {
+      statusEl.textContent = msg;
+      statusEl.className = 'status ' + (isError ? 'error' : 'success');
+    }
+    function setLoading(on) {
+      submitBtn.disabled = on;
+      submitBtn.textContent = on ? 'กำลังส่ง...' : 'ส่งประกาศ';
+    }
+
+    // Initialise LIFF and read the landlord's Line userId. Renders gracefully
+    // when opened outside Line (the SDK is absent or init fails): the form
+    // stays usable but the hidden lineUserId stays empty, in which case the
+    // server rejects the submit with a clear message.
+    (function init() {
+      if (!LIFF_ID || typeof liff === 'undefined') {
+        showStatus('ควรเปิดฟอร์มนี้ในแอป Line ค่ะ', true);
+        return;
+      }
+      liff.init({ liffId: LIFF_ID }).then(function () {
+        // External browser without a session → redirect to Line login.
+        if (!liff.isLoggedIn() && liff.isInClient() === false) {
+          liff.login();
+          return null;
+        }
+        return liff.getProfile().then(function (p) {
+          document.getElementById('lineUserId').value = p.userId;
+        });
+      }).catch(function (err) {
+        showStatus('เชื่อมต่อ Line ไม่สำเร็จ: ' + (err && err.message ? err.message : ''), true);
+      });
+    })();
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      setLoading(true);
+      statusEl.className = 'status';
+      var fd = new FormData(form);
+      fetch(SUBMIT_URL, { method: 'POST', body: fd })
+        .then(function (res) {
+          if (!res.ok) {
+            return res.json().then(function (body) {
+              throw new Error(body && body.message ? body.message : 'ส่งไม่สำเร็จ (รหัส ' + res.status + ')');
+            });
+          }
+          return res.json();
+        })
+        .then(function () {
+          form.style.display = 'none';
+          showStatus('ส่งสำเร็จค่ะ แอดมินจะตรวจสอบและอนุมัติให้ พออนุมัติแล้วห้องจะขึ้นบนเว็บทันที', false);
+        })
+        .catch(function (err) {
+          showStatus(err && err.message ? err.message : 'ส่งไม่สำเร็จ กรุณาลองใหม่อีกครั้ง', true);
+          setLoading(false);
+        });
+    });
+  </script>
+</body>
+</html>`
+}
+
+// GET /listing — serve the fillable form. Content-Type text/html; charset=utf-8.
+liff.get('/listing', (req, res) => {
+  // Submit URL is computed from the matched mount path so the page works whether
+  // it is served at /api/liff or /api/v1/liff (same-origin, no hardcoding).
+  const submitUrl = `${req.baseUrl}/listing/submit`
+  res.set('Content-Type', 'text/html; charset=utf-8')
+  res.send(renderListingHtml(config.LIFF_LISTING_ID, submitUrl))
+})
+
+// POST /listing/submit — receive the form, create a pending room + photos.
+// Photos arrive as multipart/form-data field "photos" (max 10, images only).
+liff.post('/listing/submit', photoUpload.array('photos', 10), asyncHandler(async (req, res) => {
+  // lineUserId is supplied by the LIFF page from the in-app profile.
+  const lineUserId = req.body.lineUserId
+  if (!lineUserId) {
+    throw new AppError(400, 'NO_LINE_USER', 'ไม่สามารถระบุตัวตน Line ได้ กรุณาเปิดฟอร์มนี้ใน Line')
+  }
+
+  // Find-or-create the landlord from their Line userId (admin fills in name/
+  // phone later). Mirrors the bot flow in my-listings.js.
+  let landlord = await landlords.findByLineId(lineUserId)
+  if (!landlord) landlord = await landlords.createFromBot(lineUserId)
+
+  // Resolve the free-text zone to a numeric id.
+  const zone = await findByName(req.body.zone)
+  if (!zone) throw new AppError(400, 'ZONE_NOT_FOUND', 'ไม่รู้จักย่าน')
+
+  // Validate the few fields the listing can't exist without.
+  const title = String(req.body.title || '').trim()
+  const monthlyRent = Number(req.body.monthlyRent)
+  const bedrooms = Number(req.body.bedrooms)
+  const bathrooms = Number(req.body.bathrooms)
+  if (title.length < 2) {
+    throw new AppError(400, 'INVALID_TITLE', 'กรุณากรอกชื่อห้องอย่างน้อย 2 ตัวอักษร')
+  }
+  if (!Number.isInteger(monthlyRent) || monthlyRent < 1000) {
+    throw new AppError(400, 'INVALID_RENT', 'ค่าเช่าต้องเป็นจำนวนเต็มไม่ต่ำกว่า 1,000 บาท')
+  }
+  if (!Number.isInteger(bedrooms) || bedrooms < 0) {
+    throw new AppError(400, 'INVALID_BEDROOMS', 'จำนวนห้องนอนไม่ถูกต้อง')
+  }
+  if (!Number.isInteger(bathrooms) || bathrooms < 0) {
+    throw new AppError(400, 'INVALID_BATHROOMS', 'จำนวนห้องน้ำไม่ถูกต้อง')
+  }
+
+  const room = await rooms.createPending({
+    landlordId:           landlord.id,
+    zoneId:               zone.id,
+    title,
+    description:          req.body.description || '',
+    propertyType:         req.body.propertyType || 'condo',
+    bedrooms:             +req.body.bedrooms,
+    bathrooms:            +req.body.bathrooms,
+    sizeSqm:              +req.body.sizeSqm || 0,
+    monthlyRent:          +req.body.monthlyRent,
+    address:              req.body.address || null,
+    createdByLineUserId:  lineUserId,
+  })
+
+  // Persist each uploaded photo under uploads/rooms/{roomId}/ and record it.
+  // Same naming + URL pattern as the bot photo path in my-listings.js.
+  if (req.files && req.files.length) {
+    const dir = path.join(process.cwd(), 'uploads', 'rooms', String(room.id))
+    await fs.mkdir(dir, { recursive: true })
+    for (const file of req.files) {
+      const fileName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${extFromMimetype(file.mimetype)}`
+      await fs.writeFile(path.join(dir, fileName), file.buffer)
+      const publicUrl = `${req.protocol}://${req.get('host')}/uploads/rooms/${room.id}/${fileName}`
+      await roomImages.create(room.id, publicUrl, fileName)
+    }
+  }
+
+  return res.status(201).json({ ok: true, roomId: room.id })
+}))
+
+/** Extension derived from the upload's mimetype (default jpg). */
+function extFromMimetype(mimetype = '') {
+  if (mimetype.includes('png'))  return '.png'
+  if (mimetype.includes('webp')) return '.webp'
+  if (mimetype.includes('gif'))  return '.gif'
+  return '.jpg'
+}

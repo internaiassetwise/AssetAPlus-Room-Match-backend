@@ -13,7 +13,14 @@ import { auth }           from './auth.js'
 import { viewings }       from './viewings.js'
 import { inquiries }      from './inquiries.js'
 import { myListings }     from './my-listings.js'
+import { liff }           from './liff.js'
 import { dashboardRouter } from './dashboard.js'
+import { faqs }           from './faqs.js'
+import { botInquiries }   from './botInquiries.js'
+import { adminInbox }     from './adminInbox.js'
+import { adminViewings }  from './adminViewings.js'
+import lineWebhook        from '../linebot/lineWebhook.route.js'
+import { lineDebug }      from '../linebot/lineDebug.route.js'
 
 export const apiRouter = Router()
 
@@ -31,7 +38,14 @@ apiRouter.use('/v1/auth',           auth)
 apiRouter.use('/v1/viewings',       viewings)
 apiRouter.use('/v1/inquiries',      inquiries)
 apiRouter.use('/v1/my-listings',    myListings)
+apiRouter.use('/v1/liff',           liff)
 apiRouter.use('/v1/dashboard',      dashboardRouter)
+apiRouter.use('/v1/faqs',           faqs)
+apiRouter.use('/v1/line/webhook',  lineWebhook)
+apiRouter.use('/v1/line/debug',      lineDebug)
+apiRouter.use('/v1/admin/bot-inquiries', botInquiries)
+apiRouter.use('/v1/admin/inbox',         adminInbox)
+apiRouter.use('/v1/admin/viewings',      adminViewings)
 
 // Unversioned aliases (kept for backward compat with current client)
 apiRouter.use('/health',         health)
@@ -47,4 +61,11 @@ apiRouter.use('/auth',           auth)
 apiRouter.use('/viewings',       viewings)
 apiRouter.use('/inquiries',      inquiries)
 apiRouter.use('/my-listings',    myListings)
+apiRouter.use('/liff',           liff)
 apiRouter.use('/dashboard',      dashboardRouter)
+apiRouter.use('/faqs',           faqs)
+apiRouter.use('/line/webhook',   lineWebhook)
+apiRouter.use('/line/debug',      lineDebug)
+apiRouter.use('/admin/bot-inquiries',   botInquiries)
+apiRouter.use('/admin/inbox',           adminInbox)
+apiRouter.use('/admin/viewings',        adminViewings)

@@ -1,4 +1,5 @@
 // src/app.js — Express app factory. Pure: no .listen, no process.exit.
+import path from 'node:path'
 import express from 'express'
 import helmet  from 'helmet'
 import cors    from 'cors'
@@ -63,7 +64,32 @@ export function createApp() {
   }))
 
   app.use(compression())
-  app.use(express.json({ limit: '64kb' }))
+  // `verify` captures the raw bytes BEFORE JSON parsing — needed by the Line
+  // webhook route to HMAC-verify against the X-Line-Signature header (which
+  // is computed over the exact bytes Line sent, not the re-serialised JSON).
+  app.use(express.json({
+    limit: '64kb',
+    verify: (req, _res, buf) => { req.rawBody = buf },
+  }))
+
+  // Static /uploads — serves uploaded room photos. The bot (and the
+  // /api/my-listings/:id/photos route) write here; the React frontend reads
+  // from `${API_BASE}/uploads/...`.
+  app.use('/uploads', express.static(path.join(process.cwd(), 'uploads'), {
+    maxAge: '7d',
+    fallthrough: true,
+  }))
+
+  // Static /images — demo/seed room photos. room_images.url stores these as
+  // relative "/images/<file>" paths; the backend serves them so Line Flex cards
+  // (the room-detail card's hero) can fetch them over the public APP_BASE_URL
+  // origin (Line requires absolute https image URLs). Files live at the
+  // repo-root images/ dir (server cwd is server/, so ../images resolves there).
+  app.use('/images', express.static(path.join(process.cwd(), '..', 'images'), {
+    maxAge: '7d',
+    fallthrough: true,
+  }))
+
   app.use(requestLogger())
 
   // Health is unversioned so uptime monitors can hit it directly

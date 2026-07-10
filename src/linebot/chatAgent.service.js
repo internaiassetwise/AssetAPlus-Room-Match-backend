@@ -1,0 +1,308 @@
+// src/linebot/chatAgent.service.js — The brain of the Line chatbot (Phase 4).
+//
+// handle(lineUserId, text):
+//   1. append the user message to chat_sessions.history
+//   2. run the Gemini function-calling loop (chatTurn + tool dispatch, max N rounds)
+//   3. append the assistant reply to history
+//   4. push the reply (+ any Flex confirmations tools returned) to the user
+//
+// The LOOP lives here (not in gemini.service) because it must execute tool
+// handlers — linebot-layer code. gemini.chatTurn is a pure single HTTP call.
+//
+// Function-calling contract (verified empirically against gemini-2.5-flash on
+// the v1beta endpoint): a model turn's parts may carry `functionCall`; each
+// such part also carries an opaque `thoughtSignature` (thinking model) that we
+// MUST echo back on the matching functionResponse to keep reasoning intact.
+// We send: [model: functionCall+thoughtSignature][user: functionResponse+thoughtSignature]
+// and loop. When a turn has no functionCall (just text), that text is the reply.
+//
+// Push vs reply: replyTokens expire in ~30s and the LLM round-trip exceeds that,
+// so we always push. The replyToken arg is kept for design consistency.
+
+import crypto from 'node:crypto'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+
+import { config } from '../config.js'
+import { logger } from '../logger.js'
+import * as store  from './conversationStore.service.js'
+import * as gemini from '../services/gemini.service.js'
+import * as line   from './lineMessaging.service.js'
+import * as tools  from './tools/index.js'
+import * as roomsRepo     from '../db/repositories/rooms.repo.js'
+import * as roomImages    from '../db/repositories/roomImages.repo.js'
+import * as adminQueue    from '../db/repositories/adminQueue.repo.js'
+
+const MAX_TOOL_ROUNDS = 5
+
+const SYSTEM_PROMPT = [
+  'คุณเป็น "น้องห้อง" แอดมินของเว็บไซต์หาห้องเช่า "Room Match" ที่คุยกับผู้ใช้ผ่านแชท LINE',
+  'Room Match เป็นตัวกลางระหว่าง "ผู้เช่า" และ "ผู้ปล่อยเช่า" — ทั้งคู่ติดต่อแอดมินผ่าน LINE',
+  '',
+  'กฎการตอบ (ทำตามทุกข้อ):',
+  '1. ตอบภาษาไทยเสมอ สั้น กระชับ เป็นกันเอง ใช้ "ค่ะ/นะคะ" ใช้ emoji ไม่เกิน 1 ตัวต่อข้อความ',
+  '2. ห้ามแต่งข้อมูล ราคา สถานที่ หรือเงื่อนไขขึ้นเอง — ดึงข้อมูลจริงผ่าน tool เท่านั้น',
+  '3. อนุมานเองจากข้อความว่าผู้ใช้เป็น "ผู้เช่า" หรือ "ผู้ปล่อยเช่า" ไม่ต้องถาม',
+  '   - ผู้เช่า: อยากหา/ดู/นัดชมห้อง หรือถามคำถามทั่วไปเกี่ยวกับการเช่า',
+  '   - ผู้ปล่อยเช่า: อยากลงประกาศห้อง อัปโหลดรูป หรือแก้รายละเอียดห้อง',
+  '',
+  'เครื่องมือที่มี (เลือกใช้ tool ที่เหมาะสม ถ้าเป็นแค่ทักทาย/คุยทั่วไปให้ตอบข้อความธรรมดา ไม่ต้องเรียก tool):',
+  '- searchRooms: ผู้เช่าอยากหา/ดู/เลือกห้อง — เรียกเสมอเมื่อผู้ใช้อยากเห็นห้อง แม้ไม่ได้ระบุเงื่อนไขเลย (เช่น "ขอดูห้องว่าง" "มีห้องอะไรบ้าง" "อยากดูห้อง") ให้เรียกโดยไม่ส่ง parameter เพื่อแสดงห้องแนะนำให้เลือกดูเลย อย่าถามรายละเอียดก่อน; ถ้าผู้ใช้ระบุเงื่อนไข ให้กรอก location(ชื่อย่านไทยหรืออังกฤษ) minPrice/maxPrice(บาทต่อเดือน) beds(จำนวนห้องนอนขั้นต่ำ) propertyType(condo/house/townhouse/apartment/studio)',
+  '- getRoomDetails: ผู้เช่าอยากดูรายละเอียดห้องใดห้องหนึ่ง (ต้องมี roomId — ถ้าผู้ใช้ไม่ได้ระบุ ให้ถาม หรือเรียก searchRooms ก่อนแล้วเสนอห้อง)',
+  '- getFaqAnswer: ถามเรื่องนโยบาย/กระบวนการ เช่น จ่ายค่าเช่าเมื่อไหร่ มัดจำ เอกสาร เงื่อนไข — เมื่อได้คำตอบ ให้ "ส่งคำตอบนั้นให้ผู้ใช้เป็นข้อความเดิมทั้งหมด ห้ามตัดทอนหรือสรุปย่อ"',
+  '- scheduleViewing: ผู้เช่าอยากนัดชมห้อง — เครื่องมือนี้จะแสดงเวลาที่เปิดให้จองเป็นปุ่มให้ผู้ใช้กดเลือกเอง (ส่งแค่ roomId มาพอ) ถ้าผลลัพธ์บอก hasSlots:false ให้แจ้งว่ายังไม่มีเวลาว่าง แอดมินจะติดต่อกลับ และห้ามถามให้ผู้ใช้พิมพ์เวลาเอง',
+  (config.LIFF_LISTING_ID
+    ? '- createRoomDraft: ผู้ปล่อยเช่าอยากลงประกาศห้อง — เครื่องมือนี้จะส่งฟอร์มให้กรอกใน Line (กดที่การ์ดด้านล่าง) เรียกแค่ชื่อ createRoomDraft พอ ไม่ต้องถามรายละเอียดเอง'
+    : '- createRoomDraft: ผู้ปล่อยเช่าอยากลงประกาศ — ต้องมี title, zone(ย่าน), monthlyRent, beds, baths ถ้าขาดให้ถามจนครบก่อนเรียก; ผลลัพธ์ status=pending รอแอดมินอนุมัติ'),
+  '- editRoomDescription: ผู้ปล่อยเช่าอยากแก้รายละเอียดห้อง — น้องห้องแก้เองไม่ได้ จะส่งเรื่องให้แอดมิน (tool นี้ส่งต่อเสมอ ไม่ได้แก้จริง)',
+  '- escalateToAdmin: กรณีที่น้องห้องช่วยไม่ได้ คำถามนอกขอบเขต หรือ getFaqAnswer บอก found=false — ส่งต่อให้แอดมิน',
+  '',
+  'หลังเรียก tool แล้ว ใช้ผลลัพธ์ตอบผู้ใช้เป็นไทยสั้นๆ ห้ามเผยรายละเอียดเชิงเทคนิค (เช่น roomId, คะแนน similarity, โครงสร้าง JSON) ให้ผู้ใช้โดยไม่จำเป็น',
+].join('\n')
+
+/**
+ * Run one conversational turn WITHOUT pushing to Line: append the user message,
+ * run the function-calling loop, append the assistant reply. Returns
+ * { reply, pushes, status }. Used by handle() (which then pushes) and by the
+ * dev /api/line/debug/agent endpoint (dry-run).
+ *
+ * @param {string} lineUserId
+ * @param {string} text
+ * @returns {Promise<{reply:string|null, pushes:object[], status:string}>}
+ */
+export async function runOnce(lineUserId, text) {
+  if (!lineUserId || !text || typeof text !== 'string') {
+    return { reply: null, pushes: [], status: 'bad_input' }
+  }
+  if (!gemini.isConfigured()) {
+    return { reply: null, pushes: [], status: 'not_configured' }
+  }
+  const trimmed = text.trim()
+  if (!trimmed) return { reply: null, pushes: [], status: 'bad_input' }
+
+  // "typing…" indicator — best-effort; never fatal.
+  line.startLoading?.(lineUserId, 20).catch(() => {})
+
+  const { history } = await store.append(lineUserId, 'user', trimmed)
+  const { reply, pushes } = await runAgentLoop({ lineUserId, history })
+  if (reply) await store.append(lineUserId, 'assistant', reply)
+  else logger.warn({ lineUserId, inLen: trimmed.length }, 'agent loop returned no reply')
+  return { reply, pushes, status: reply ? 'ok' : 'no_reply' }
+}
+
+/**
+ * Handle a text message from a Line user (the webhook path). Runs the turn and
+ * pushes the reply (+ any Flex confirmations tools returned) to the user.
+ *
+ * @param {string} lineUserId
+ * @param {string} text
+ * @param {string} [replyToken]  Unused in Phase 4 (we always push) — kept for API stability.
+ * @returns {Promise<{reply:string}|null>}
+ */
+export async function handle(lineUserId, text, _replyToken = null) {
+  let r
+  try {
+    r = await runOnce(lineUserId, text)
+  } catch (err) {
+    logger.error({ err, lineUserId }, 'chat agent handle failed')
+    await safePush(lineUserId, 'ขออภัยค่ะ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งค่ะ')
+    return null
+  }
+
+  if (r.status === 'not_configured') {
+    await safePush(lineUserId, 'ขออภัยค่ะ ระบบยังไม่ได้ตั้งค่า AI กรุณาลองใหม่ภายหลัง')
+    return null
+  }
+  if (!r.reply) {
+    // A side-effecting tool (createRoomDraft / scheduleViewing) may have
+    // committed its DB write AND queued a confirmation card even though we
+    // couldn't produce a text reply. Deliver those FIRST so the user sees the
+    // action succeeded and doesn't blindly retry (which would duplicate the
+    // draft/viewing). Only prompt a retry when nothing was actually done.
+    for (const msg of r.pushes) await safePush(lineUserId, msg)
+    await safePush(lineUserId, r.pushes.length
+      ? 'เสร็จเรียบร้อยค่ะ แต่น้องห้องตอบข้อความไม่ได้ชั่วคราว หากมีปัญหาแจ้งได้นะคะ'
+      : 'ขออภัยค่ะ ระบบตอบกลับไม่ได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง')
+    return null
+  }
+
+  await safePush(lineUserId, { type: 'text', text: r.reply })
+  for (const msg of r.pushes) await safePush(lineUserId, msg)
+
+  logger.info(
+    { lineUserId, outLen: r.reply.length, pushes: r.pushes.length },
+    'chat agent replied (tools)',
+  )
+  return { reply: r.reply }
+}
+
+/**
+ * The function-calling loop. Builds the contents from history, calls chatTurn,
+ * executes any returned functionCalls, feeds results back, and repeats until the
+ * model produces a text reply (or we hit the round cap).
+ *
+ * @returns {Promise<{reply:string|null, pushes:object[]}>}
+ */
+async function runAgentLoop({ lineUserId, history }) {
+  const ctx = { lineUserId, logger }
+  let contents = buildContents(history)
+  const pushes = []
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const turn = await gemini.chatTurn({
+      contents,
+      tools: tools.DECLARATIONS,
+      toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+    })
+
+    if (!turn.ok) {
+      logger.warn({ lineUserId, status: turn.status, error: turn.error, round }, 'chatTurn failed in loop')
+      return { reply: null, pushes }
+    }
+
+    const fcs = Array.isArray(turn.functionCalls) ? turn.functionCalls : []
+    if (fcs.length === 0) {
+      // Pure text turn → final reply. (Empty text falls through to the cap fallback.)
+      return { reply: turn.text && turn.text.trim() ? turn.text.trim() : null, pushes }
+    }
+
+    // Execute every functionCall this turn, then build the two turns to append:
+    // a model turn echoing the calls (+thoughtSignature) and a user turn with
+    // the functionResponses (+thoughtSignature). Order is preserved.
+    const modelParts = []
+    const userParts = []
+    for (const fc of fcs) {
+      logger.info({ lineUserId, tool: fc.name, args: fc.args, round }, 'agent calling tool')
+      const result = await tools.dispatch(fc.name, fc.args, ctx)
+      if (result && Array.isArray(result._push)) pushes.push(...result._push)
+      const { _push, ...response } = result
+      const sig = fc.thoughtSignature ? { thoughtSignature: fc.thoughtSignature } : {}
+      modelParts.push({ functionCall: { name: fc.name, args: fc.args }, ...sig })
+      // functionResponse.response MUST be a JSON object.
+      userParts.push({ functionResponse: { name: fc.name, response: response ?? {} }, ...sig })
+    }
+    contents = [
+      ...contents,
+      { role: 'model', parts: modelParts },
+      { role: 'user', parts: userParts },
+    ]
+  }
+
+  logger.warn({ lineUserId, pushes: pushes.length }, 'agent loop hit round cap without a text reply')
+  // If a side-effecting tool already ran, acknowledge the partial completion
+  // rather than a generic "try again" (which would sit next to a success card
+  // and invite a duplicate-creating resubmit).
+  return {
+    reply: pushes.length
+      ? 'น้องห้องดำเนินการให้บางส่วนเรียบร้อยแล้วค่ะ รบกวนรอแอดมินตรวจสอบ หรือถามเพิ่มเติมได้นะคะ'
+      : 'ขออภัยค่ะ ระบบประมวลผลนานเกินไป รบกวนลองใหม่อีกครั้งนะคะ',
+    pushes,
+  }
+}
+
+/**
+ * The system prompt with today's date appended, so the model can resolve
+ * relative dates in Thai ("พรุ่งนี้", "สัปดาห์หน้า", "วันจันทร์หน้า") for the
+ * scheduleViewing tool. Date is formatted in Asia/Bangkok (ICT, UTC+7) so it is
+ * correct regardless of the server's own timezone.
+ */
+function systemWithDate() {
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' })
+  const dow = new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Bangkok', weekday: 'long' })
+  return `${SYSTEM_PROMPT}\n\n---\n\n(ข้อมูลปัจจุบัน: วันนี้คือ ${today} (${dow}) เวลาไทย ICT UTC+7 — ใช้เพื่อคำนวณวันเวลาสัมพัทธ์ เช่น "พรุ่งนี้" "สัปดาห์หน้า" ให้ถูกต้อง)`
+}
+
+/**
+ * Translate our stored history `{role,content,ts}[]` into Gemini's `contents`
+ * shape and inline the system prompt into the first user turn (the v1 endpoint
+ * rejects a top-level systemInstruction field; inlining is the established pattern).
+ */
+function buildContents(history) {
+  const system = systemWithDate()
+  const turns = (Array.isArray(history) ? history : [])
+    .filter((m) => m && m.content != null && String(m.content).trim() !== '')
+    .map((m) => ({
+      role:  m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: String(m.content).slice(0, 4000) }],
+    }))
+
+  if (turns.length === 0) {
+    return [{ role: 'user', parts: [{ text: system }] }]
+  }
+  if (turns[0].role === 'user') {
+    turns[0].parts[0].text = `${system}\n\n---\n\n${turns[0].parts[0].text}`
+  } else {
+    turns.unshift({ role: 'user', parts: [{ text: system }] })
+  }
+  return turns
+}
+
+/**
+ * Handle an image message from a Line user (a landlord sending room photos).
+ * Attaches the image to the user's most recent pending draft, or escalates to
+ * admin if there is no draft to attach it to.
+ *
+ * @param {string} lineUserId
+ * @param {string} messageId  Line message id (used to fetch the bytes)
+ * @param {string} [_replyToken]
+ * @returns {Promise<{roomId:number}|null>}
+ */
+export async function handleImage(lineUserId, messageId, _replyToken = null) {
+  if (!lineUserId || !messageId) return null
+  try {
+    const draft = await roomsRepo.findPendingByLineUser(lineUserId)
+    if (!draft) {
+      await adminQueue.create({
+        lineUserId,
+        reason: 'upload-photos',
+        summary: 'ได้รับรูปภาพจากผู้ใช้ แต่ยังไม่มีประกาศห้องที่รออนุมัติ',
+        originalPayload: { messageId },
+      })
+      await safePush(lineUserId,
+        'ยังไม่มีประกาศห้องที่รออนุมัติในระบบค่ะ ส่งรูปนี้ให้แอดมินดูแล้ว หากต้องการปล่อยห้อง พิมพ์บอกรายละเอียดห้องก่อนได้เลยนะคะ')
+      return null
+    }
+
+    const { buffer, contentType, filename } = await line.downloadImage(messageId)
+    const ext = extFromNameType(filename, contentType)
+    const fileName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`
+    const dir = path.join(process.cwd(), 'uploads', 'rooms', String(draft.id))
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, fileName), buffer)
+
+    const base = config.APP_BASE_URL || `http://localhost:${config.PORT}`
+    const publicUrl = `${base}/uploads/rooms/${draft.id}/${fileName}`
+    await roomImages.create(draft.id, publicUrl, fileName)
+
+    await safePush(lineUserId, `ได้รับรูปภาพสำหรับห้อง "${draft.title}" เรียบร้อยค่ะ 📸`)
+    logger.info({ lineUserId, roomId: draft.id }, 'attached room photo via Line')
+    return { roomId: draft.id }
+  } catch (err) {
+    logger.error({ err, lineUserId }, 'chat agent handleImage failed')
+    await safePush(lineUserId, 'ขออภัยค่ะ รับรูปภาพไม่สำเร็จ รบกวนลองส่งใหม่อีกครั้งนะคะ')
+    return null
+  }
+}
+
+function extFromNameType(filename, contentType) {
+  const fromName = filename ? path.extname(filename) : ''
+  if (fromName) return fromName
+  if (contentType?.includes('png'))  return '.png'
+  if (contentType?.includes('webp')) return '.webp'
+  if (contentType?.includes('gif'))  return '.gif'
+  return '.jpg'
+}
+
+/**
+ * Push helper — swallows Line-side errors so one bad push never crashes the
+ * webhook path. Accepts a single Line message object or a plain string.
+ */
+async function safePush(lineUserId, message) {
+  try {
+    if (!line.isConfigured()) return
+    const msg = typeof message === 'string' ? { type: 'text', text: message } : message
+    await line.pushMessage(lineUserId, msg)
+  } catch (err) {
+    logger.error({ err, lineUserId }, 'line push failed')
+  }
+}

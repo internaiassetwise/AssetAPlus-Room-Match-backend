@@ -89,3 +89,36 @@ function rowToLandlord(row) {
     updatedAt: row.updated_at,
   }
 }
+
+/**
+ * Look up a landlord by their Line userId. Used by the .NET chat bot when
+ * forwarding actions from chat (list-a-room, edit-description, etc.).
+ */
+export async function findByLineId(lineUserId) {
+  if (!lineUserId) return null
+  const { rows } = await query(
+    `${SELECT_LANDLORD} WHERE line_id = $1`,
+    [lineUserId],
+  )
+  return rows[0] ? rowToLandlord(rows[0]) : null
+}
+
+/**
+ * Create a stub landlord row from a Line userId (used by the bot before the
+ * admin has captured the landlord's real name/phone). full_name and phone
+ * fall back to placeholders that admin can clean up later.
+ *
+ * Phone is NOT NULL in the schema but we generate a unique value per
+ * lineUserId so the row can be inserted without asking the user anything yet.
+ */
+export async function createFromBot(lineUserId) {
+  const stubPhone = `line:${lineUserId}`
+  const stubName  = `Line user ${lineUserId.slice(0, 8)}`
+  const { rows } = await query(
+    `INSERT INTO landlords (full_name, phone, line_id, source)
+     VALUES ($1, $2, $3, 'line-bot')
+     RETURNING id`,
+    [stubName, stubPhone, lineUserId],
+  )
+  return findById(rows[0].id)
+}
