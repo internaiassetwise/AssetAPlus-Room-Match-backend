@@ -21,3 +21,6 @@ npm-debug.log*
 .vscode/
 .idea/
 *.swp
+
+# runtime uploads (room photos saved by the bot / LIFF form) — not source
+uploads/
