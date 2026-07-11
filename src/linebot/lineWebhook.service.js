@@ -22,6 +22,8 @@ import { createForTenant } from '../db/repositories/viewings.repo.js'
 import { findByLineId as findTenantByLineId, createFromBot as createTenantFromBot } from '../db/repositories/tenants.repo.js'
 import { viewingConfirmation, welcome, menuQuickReply } from './flexMessages.js'
 import { notifyAdminGroup } from './adminAlert.service.js'
+import * as chatSessions from '../db/repositories/chatSessions.repo.js'
+import * as adminQueue from '../db/repositories/adminQueue.repo.js'
 
 const SIGNATURE_HEADER = 'x-line-signature'
 
@@ -80,10 +82,13 @@ export async function handleEvent(payload) {
           }
         }
       } else if (eventType === 'message' && messageType === 'text') {
+        if (await routeToLiveAgent(lineUserId, ev)) continue // human owns the chat → skip the LLM
         await handle(lineUserId, ev?.message?.text ?? '', replyToken)
       } else if (eventType === 'message' && messageType === 'image') {
+        if (await routeToLiveAgent(lineUserId, ev)) continue
         await handleImage(lineUserId, ev?.message?.id, replyToken)
       } else if (eventType === 'postback') {
+        if (await routeToLiveAgent(lineUserId, ev)) continue
         await handlePostback(lineUserId, ev?.postback?.data)
       } else if (eventType === 'follow' && lineUserId) {
         // New friend added the bot — send a welcome + the quick-reply menu so
@@ -95,6 +100,46 @@ export async function handleEvent(payload) {
       logger.error({ err, lineUserId, eventType, messageType }, 'webhook dispatch failed')
     }
   }
+}
+
+/**
+ * If a human admin has taken over this user's chat, route the inbound event to
+ * the live admin_queue ticket's `thread` (and ping the admin group) instead of
+ * the LLM. Returns true when handled (caller skips Gemini), false otherwise.
+ * Never throws — a DB hiccup here falls through to the normal AI path.
+ */
+async function routeToLiveAgent(lineUserId, ev) {
+  if (!lineUserId) return false
+  let state
+  try {
+    state = await chatSessions.getHandlerState(lineUserId)
+  } catch (err) {
+    logger.error({ err, lineUserId }, 'live-agent state read failed')
+    return false
+  }
+  if (!state || state.handler !== 'human' || !state.activeTicketId) return false
+
+  // Describe the inbound event as a transcript line.
+  let label
+  if (ev?.type === 'postback') {
+    label = `🔘 (${ev?.postback?.data || 'action'})`
+  } else if (ev?.message?.type === 'image') {
+    label = '📷 ส่งรูปภาพมา'
+  } else {
+    label = (ev?.message?.text ?? '(ข้อความ)').slice(0, 1000)
+  }
+
+  try {
+    await adminQueue.appendThread(state.activeTicketId, {
+      role: 'user',
+      text:  label,
+      ts:    new Date().toISOString(),
+    })
+  } catch (err) {
+    logger.error({ err, lineUserId, ticketId: state.activeTicketId }, 'live-agent thread append failed')
+  }
+  notifyAdminGroup(`💬 [ลูกค้าตอบกลับ]\n${label}`)
+  return true
 }
 
 /**

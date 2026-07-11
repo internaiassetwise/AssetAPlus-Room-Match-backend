@@ -12,7 +12,8 @@
 import { query } from '../pool.js'
 
 const COLS = `id, line_user_id, reason, summary, original_payload, status,
-              admin_reply, replied_at, resolved_at, created_at, updated_at`
+              admin_reply, replied_at, resolved_at, thread,
+              created_at, updated_at`
 
 function shape(row) {
   if (!row) return null
@@ -26,6 +27,7 @@ function shape(row) {
     adminReply:      row.admin_reply,
     repliedAt:       row.replied_at,
     resolvedAt:      row.resolved_at,
+    thread:          row.thread ?? [],
     createdAt:       row.created_at,
     updatedAt:       row.updated_at,
   }
@@ -89,6 +91,32 @@ export async function markResolved(id) {
   const { rows } = await query(
     `UPDATE admin_queue
         SET status = 'resolved', resolved_at = NOW(), updated_at = NOW()
+      WHERE id = $1 RETURNING ${COLS}`,
+    [id],
+  )
+  return shape(rows[0])
+}
+
+/**
+ * Append one turn ({ role, text, ts }) to a live ticket's `thread`. Used by the
+ * webhook (user messages while a human owns the chat) and by the inbox reply
+ * path (admin messages). The ticket stays open — the thread is the transcript.
+ */
+export async function appendThread(id, entry) {
+  const { rows } = await query(
+    `UPDATE admin_queue
+        SET thread = thread || $2::jsonb, updated_at = NOW()
+      WHERE id = $1 RETURNING ${COLS}`,
+    [id, JSON.stringify([entry])],
+  )
+  return shape(rows[0])
+}
+
+/** Reopen a ticket for a live takeover (clears resolved/replied state). */
+export async function reopen(id) {
+  const { rows } = await query(
+    `UPDATE admin_queue
+        SET status = 'open', resolved_at = NULL, updated_at = NOW()
       WHERE id = $1 RETURNING ${COLS}`,
     [id],
   )

@@ -8,6 +8,7 @@
 // someone get back to you" reply.
 
 import { alertAdmins } from '../adminAlert.service.js'
+import * as chatSessions from '../../db/repositories/chatSessions.repo.js'
 
 export const name = 'escalateToAdmin'
 
@@ -104,7 +105,7 @@ export async function handler(args, ctx) {
   try {
     // Capture the user's verbatim message (if provided) inside originalPayload
     // so the admin has full context alongside the model's summary.
-    await alertAdmins({
+    const ticket = await alertAdmins({
       lineUserId:      ctx.lineUserId,
       reason,
       summary:         summary.trim(),
@@ -112,12 +113,17 @@ export async function handler(args, ctx) {
     })
     // (alertAdmins also pushes to the admin Line group if configured)
 
+    // Live takeover: mute the bot for this user and link the new ticket, so the
+    // user's next messages go straight to the admin (via the inbox thread) and
+    // skip Gemini until the admin hands control back.
+    await chatSessions.beginTakeover(ctx.lineUserId, { ticketId: ticket?.id })
+
     log.info(
-      { tool: name, lineUserId: ctx.lineUserId, reason },
-      'escalated to admin queue',
+      { tool: name, lineUserId: ctx.lineUserId, reason, ticketId: ticket?.id },
+      'escalated to admin queue — live takeover started',
     )
 
-    return { escalated: true, reason }
+    return { escalated: true, reason, live: true }
   } catch (err) {
     // Unexpected DB failure — surface as a soft error so the model can relay a
     // polite Thai fallback instead of crashing the whole turn.

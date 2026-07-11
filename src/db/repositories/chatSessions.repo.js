@@ -18,19 +18,24 @@
 import { query } from '../pool.js'
 
 const COLS = `id, line_user_id, history, current_intent, collected,
+              handler, active_ticket_id, taken_over_by, taken_over_at,
               expires_at, created_at, updated_at`
 
 function shape(row) {
   if (!row) return null
   return {
-    id:            row.id,
-    lineUserId:    row.line_user_id,
-    history:       row.history ?? [],
-    currentIntent: row.current_intent,
-    collected:     row.collected ?? {},
-    expiresAt:     row.expires_at,
-    createdAt:     row.created_at,
-    updatedAt:     row.updated_at,
+    id:             row.id,
+    lineUserId:     row.line_user_id,
+    history:        row.history ?? [],
+    currentIntent:  row.current_intent,
+    collected:      row.collected ?? {},
+    handler:        row.handler ?? 'ai',
+    activeTicketId: row.active_ticket_id ?? null,
+    takenOverBy:    row.taken_over_by ?? null,
+    takenOverAt:    row.taken_over_at ?? null,
+    expiresAt:      row.expires_at,
+    createdAt:      row.created_at,
+    updatedAt:      row.updated_at,
   }
 }
 
@@ -142,4 +147,68 @@ export async function deleteExpired() {
     `DELETE FROM chat_sessions WHERE expires_at < NOW()`,
   )
   return rowCount
+}
+
+// ─── Live admin takeover ────────────────────────────────────────────────
+//
+// `handler` records who is answering this user right now: 'ai' (Gemini) or
+// 'human' (a real admin, muted the bot). While 'human', the webhook routes the
+// user's messages to the linked admin_queue ticket's `thread` instead of the
+// LLM. `active_ticket_id` is the live conversation the user is appended to.
+
+/** Read just the handler state for a user. Defaults to {ai, null} if no row. */
+export async function getHandlerState(lineUserId) {
+  const { rows } = await query(
+    `SELECT handler, active_ticket_id FROM chat_sessions WHERE line_user_id = $1`,
+    [lineUserId],
+  )
+  if (!rows[0]) return { handler: 'ai', activeTicketId: null }
+  return { handler: rows[0].handler ?? 'ai', activeTicketId: rows[0].active_ticket_id ?? null }
+}
+
+/**
+ * Put a user into human mode, linked to a live admin_queue ticket. Creates the
+ * session row if the user has never talked to the bot. Idempotent — re-taking
+ * over just refreshes the link + the "taken over by/at" audit stamp.
+ */
+export async function beginTakeover(lineUserId, { ticketId, adminId } = {}) {
+  await getOrCreate(lineUserId)
+  const { rows } = await query(
+    `UPDATE chat_sessions
+        SET handler          = 'human',
+            active_ticket_id = $2,
+            taken_over_by    = $3,
+            taken_over_at    = NOW(),
+            updated_at       = NOW()
+      WHERE line_user_id = $1
+      RETURNING ${COLS}`,
+    [lineUserId, ticketId ?? null, adminId ?? null],
+  )
+  return shape(rows[0])
+}
+
+/** Hand the user back to the bot (end a live takeover). */
+export async function endTakeover(lineUserId) {
+  const { rows } = await query(
+    `UPDATE chat_sessions
+        SET handler          = 'ai',
+            active_ticket_id = NULL,
+            taken_over_by    = NULL,
+            taken_over_at    = NULL,
+            updated_at       = NOW()
+      WHERE line_user_id = $1
+      RETURNING ${COLS}`,
+    [lineUserId],
+  )
+  return shape(rows[0])
+}
+
+/** line_user_id|ticketId keys for every currently-live conversation. */
+export async function listLive() {
+  const { rows } = await query(
+    `SELECT line_user_id, active_ticket_id
+       FROM chat_sessions
+      WHERE handler = 'human' AND active_ticket_id IS NOT NULL`,
+  )
+  return rows.map((r) => `${r.line_user_id}|${r.active_ticket_id}`)
 }
