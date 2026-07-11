@@ -67,13 +67,27 @@ function rentText(n) {
 export function menuQuickReply() {
   const items = [
     { type: 'action', action: { type: 'message', label: '🔍 หาห้องเช่า',  text: 'ขอดูห้องว่าง' } },
-    { type: 'action', action: { type: 'message', label: '🏠 ลงประกาศ',    text: 'อยากลงประกาษห้อง' } },
+    { type: 'action', action: { type: 'message', label: '🏠 ลงประกาศ',    text: 'อยากลงประกาศห้อง' } },
     { type: 'action', action: { type: 'message', label: '📅 นัดชมห้อง',   text: 'อยากนัดชมห้อง' } },
     { type: 'action', action: { type: 'message', label: '💬 ถามแอดมิน',  text: 'ติดต่อแอดมิน' } },
   ]
   if (config.WEB_BASE_URL) {
     items.push({ type: 'action', action: { type: 'uri', label: '🌐 เว็บไซต์', uri: config.WEB_BASE_URL } })
   }
+  return { items }
+}
+
+/**
+ * Zone picker chips — shown when a tenant wants to book a viewing but hasn't
+ * chosen a room yet. Each chip searches that zone ("ดูห้องว่างย่าน…") so they can
+ * pick a room, then tap อยากนัดชม on it to book. Pass the zones from zones.repo
+ * (rows with `name_th`). Max 12 (Line's quick-reply ceiling is 13).
+ */
+export function zoneQuickReply(zones = []) {
+  const items = (Array.isArray(zones) ? zones : []).slice(0, 12).map((z) => ({
+    type: 'action',
+    action: { type: 'message', label: `📍 ${z.name_th}`, text: `ดูห้องว่างย่าน${z.name_th}` },
+  }))
   return { items }
 }
 

@@ -32,7 +32,8 @@ import * as tools  from './tools/index.js'
 import * as roomsRepo     from '../db/repositories/rooms.repo.js'
 import * as roomImages    from '../db/repositories/roomImages.repo.js'
 import * as adminQueue    from '../db/repositories/adminQueue.repo.js'
-import { menuQuickReply } from './flexMessages.js'
+import { menuQuickReply, zoneQuickReply } from './flexMessages.js'
+import * as zonesRepo from '../db/repositories/zones.repo.js'
 
 const MAX_TOOL_ROUNDS = 5
 
@@ -51,7 +52,7 @@ const SYSTEM_PROMPT = [
   '- searchRooms: ผู้เช่าอยากหา/ดู/เลือกห้อง — เรียกเสมอเมื่อผู้ใช้อยากเห็นห้อง แม้ไม่ได้ระบุเงื่อนไขเลย (เช่น "ขอดูห้องว่าง" "มีห้องอะไรบ้าง" "อยากดูห้อง") ให้เรียกโดยไม่ส่ง parameter เพื่อแสดงห้องแนะนำให้เลือกดูเลย อย่าถามรายละเอียดก่อน; ถ้าผู้ใช้ระบุเงื่อนไข ให้กรอก location(ชื่อย่านไทยหรืออังกฤษ) minPrice/maxPrice(บาทต่อเดือน) beds(จำนวนห้องนอนขั้นต่ำ) propertyType(condo/house/townhouse/apartment/studio)',
   '- getRoomDetails: ผู้เช่าอยากดูรายละเอียดห้องใดห้องหนึ่ง (ต้องมี roomId — ถ้าผู้ใช้ไม่ได้ระบุ ให้ถาม หรือเรียก searchRooms ก่อนแล้วเสนอห้อง)',
   '- getFaqAnswer: ถามเรื่องนโยบาย/กระบวนการ เช่น จ่ายค่าเช่าเมื่อไหร่ มัดจำ เอกสาร เงื่อนไข — เมื่อได้คำตอบ ให้ "ส่งคำตอบนั้นให้ผู้ใช้เป็นข้อความเดิมทั้งหมด ห้ามตัดทอนหรือสรุปย่อ"',
-  '- scheduleViewing: ผู้เช่าอยากนัดชมห้อง — เครื่องมือนี้จะแสดงเวลาที่เปิดให้จองเป็นปุ่มให้ผู้ใช้กดเลือกเอง (ส่งแค่ roomId มาพอ) ถ้าผลลัพธ์บอก hasSlots:false ให้แจ้งว่ายังไม่มีเวลาว่าง แอดมินจะติดต่อกลับ และห้ามถามให้ผู้ใช้พิมพ์เวลาเอง',
+  '- scheduleViewing: ผู้เช่าอยากนัดชมห้อง — เครื่องมือนี้จะแสดงเวลาที่เปิดให้จองเป็นปุ่มให้ผู้ใช้กดเลือกเอง (ส่งแค่ roomId มาพอ) ถ้าผลลัพธ์บอก hasSlots:false ให้แจ้งว่ายังไม่มีเวลาว่าง แอดมินจะติดต่อกลับ และห้ามถามให้ผู้ใช้พิมพ์เวลาเอง; ถ้าผู้ใช้อยากนัดชมแต่ยังไม่ได้เลือกห้อง ห้ามเรียก scheduleViewing ให้ชวนเลือกย่าน/ห้องก่อน (ระบบจะแสดงปุ่มย่านให้กดเอง)',
   (config.LIFF_LISTING_ID
     ? '- createRoomDraft: ผู้ปล่อยเช่าอยากลงประกาศห้อง — เครื่องมือนี้จะส่งฟอร์มให้กรอกใน Line (กดที่การ์ดด้านล่าง) เรียกแค่ชื่อ createRoomDraft พอ ไม่ต้องถามรายละเอียดเอง'
     : '- createRoomDraft: ผู้ปล่อยเช่าอยากลงประกาศ — ต้องมี title, zone(ย่าน), monthlyRent, beds, baths ถ้าขาดให้ถามจนครบก่อนเรียก; ผลลัพธ์ status=pending รอแอดมินอนุมัติ'),
@@ -127,7 +128,14 @@ export async function handle(lineUserId, text, _replyToken = null) {
     return null
   }
 
-  await safePush(lineUserId, { type: 'text', text: r.reply, quickReply: menuQuickReply() })
+  // Show a zone picker when the tenant wants to book a viewing but hasn't named
+  // a room yet (pick a zone → see rooms → tap อยากนัดชม on one → book).
+  // Otherwise the standard floating menu.
+  const wantsViewing = /นัดชม|เข้าชม/.test(text) && !/\d/.test(text)
+  const quickReply = wantsViewing
+    ? zoneQuickReply(await zonesRepo.findAll())
+    : menuQuickReply()
+  await safePush(lineUserId, { type: 'text', text: r.reply, quickReply })
   for (const msg of r.pushes) await safePush(lineUserId, msg)
 
   logger.info(
