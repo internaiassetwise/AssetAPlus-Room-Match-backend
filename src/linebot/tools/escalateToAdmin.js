@@ -16,13 +16,16 @@ export const name = 'escalateToAdmin'
 // specific about WHEN to use it vs. the more targeted tools and WHAT it returns.
 export const description =
   'Escalate a Room Match rental conversation to a human admin when the bot cannot resolve ' +
-  "the user's request — e.g. an FAQ the bot could not answer, a request that is out of scope, " +
-  'a complaint, a viewing/booking issue, a landlord listing or photo request, or anything else ' +
-  'with no dedicated tool or a dead end. Use this as the last resort AFTER the specific tools ' +
-  '(FAQ, room details, viewing, edit description, etc.) are not applicable. ' +
-  'Requires a short Thai summary of what the user wants; optionally a reason and the original ' +
-  "user message. Returns { escalated: true } — it does NOT answer the user, it only queues the " +
-  'request for an admin to follow up.'
+  "the user's IN-SCOPE request — e.g. an FAQ the bot could not answer, a complaint, a " +
+  'viewing/booking issue, a landlord listing or photo request, or any room-rental matter that ' +
+  'needs a human action. Use this as the last resort AFTER the specific tools (FAQ, room ' +
+  'details, viewing, edit description, etc.) are not applicable. ' +
+  'Do NOT use this for OFF-TOPIC / out-of-scope questions (general knowledge, news, weather, ' +
+  'other products, homework/code, etc.) — those must be politely declined and steered back to ' +
+  'room rentals WITHOUT escalating (escalating off-topic spam is wrong). ' +
+  'Requires a short summary of what the user wants (in the language the user is writing in); ' +
+  "optionally a reason and the original user message. Returns { escalated: true } — it does NOT " +
+  'answer the user, it only queues the request for an admin to follow up.'
 
 export const parameters = {
   type: 'object',
