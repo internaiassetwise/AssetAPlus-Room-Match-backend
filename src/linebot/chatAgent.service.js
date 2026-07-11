@@ -31,7 +31,7 @@ import * as line   from './lineMessaging.service.js'
 import * as tools  from './tools/index.js'
 import * as roomsRepo     from '../db/repositories/rooms.repo.js'
 import * as roomImages    from '../db/repositories/roomImages.repo.js'
-import * as adminQueue    from '../db/repositories/adminQueue.repo.js'
+import { alertAdmins } from './adminAlert.service.js'
 import { menuQuickReply, zoneQuickReply } from './flexMessages.js'
 import * as zonesRepo from '../db/repositories/zones.repo.js'
 
@@ -261,7 +261,7 @@ export async function handleImage(lineUserId, messageId, _replyToken = null) {
   try {
     const draft = await roomsRepo.findPendingByLineUser(lineUserId)
     if (!draft) {
-      await adminQueue.create({
+      await alertAdmins({
         lineUserId,
         reason: 'upload-photos',
         summary: 'ได้รับรูปภาพจากผู้ใช้ แต่ยังไม่มีประกาศห้องที่รออนุมัติ',

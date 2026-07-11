@@ -60,7 +60,25 @@ export async function handleEvent(payload) {
     logger.info({ lineUserId, eventType, messageType }, 'line webhook received')
 
     try {
-      if (eventType === 'message' && messageType === 'text') {
+      const sourceType = ev?.source?.type ?? 'user'
+      const groupId = ev?.source?.groupId ?? ev?.source?.roomId ?? null
+
+      // In group/room chats the bot is PASSIVE: it only pushes alerts here, it
+      // never replies to chatter or runs the LLM. Surface the group id on join
+      // (and on a "group id" command) so admins can wire up LINE_ADMIN_GROUP_ID.
+      if (sourceType === 'group' || sourceType === 'room') {
+        if (eventType === 'join' && groupId) {
+          await push(groupId, { type: 'text', text:
+            'สวัสดีค่ะ น้องห้องเข้าร่วมกลุ่มแล้ว 🙌\n' +
+            `Group ID ของกลุ่มนี้:\n${groupId}\n\n` +
+            'คัดลอกเลขนี้ไปใส่ LINE_ADMIN_GROUP_ID เพื่อให้แจ้งเตือนเข้ากลุ่มนี้ได้เลยค่ะ' })
+        } else if (eventType === 'message' && messageType === 'text' && groupId) {
+          const t = (ev?.message?.text ?? '').trim().toLowerCase()
+          if (t === 'group id' || t === 'id' || t === 'รหัสกลุ่ม') {
+            await push(groupId, { type: 'text', text: `Group ID: ${groupId}` })
+          }
+        }
+      } else if (eventType === 'message' && messageType === 'text') {
         await handle(lineUserId, ev?.message?.text ?? '', replyToken)
       } else if (eventType === 'message' && messageType === 'image') {
         await handleImage(lineUserId, ev?.message?.id, replyToken)
@@ -71,7 +89,7 @@ export async function handleEvent(payload) {
         // desktop users (no Rich Menu) immediately see how to get started.
         await push(lineUserId, { ...welcome(), quickReply: menuQuickReply() })
       }
-      // 'unfollow','join','leave', etc. → no-op (audit-logged above)
+      // 'unfollow','leave', etc. → no-op (audit-logged above)
     } catch (err) {
       logger.error({ err, lineUserId, eventType, messageType }, 'webhook dispatch failed')
     }

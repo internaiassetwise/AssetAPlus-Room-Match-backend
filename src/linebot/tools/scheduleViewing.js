@@ -8,7 +8,7 @@
 
 import { findById } from '../../db/repositories/rooms.repo.js'
 import { openForRoom } from '../../db/repositories/viewingSlots.repo.js'
-import { create as createAdminAlert } from '../../db/repositories/adminQueue.repo.js'
+import { alertAdmins } from '../adminAlert.service.js'
 import { slotCarousel } from '../flexMessages.js'
 
 export const name = 'scheduleViewing'
@@ -48,7 +48,7 @@ export async function handler(args, ctx) {
     // No bookable times → alert the admin so they can open a slot and follow up
     // with the tenant. Best-effort: a DB failure here must not break the reply.
     try {
-      await createAdminAlert({
+      await alertAdmins({
         lineUserId:      ctx.lineUserId,
         reason:          'view-a-room',
         summary:         `ลูกค้าต้องการนัดชมห้อง "${room.title}" (ห้อง #${roomId}) แต่ยังไม่มีช่วงเวลาที่เปิดให้จอง — รบกวนเปิดเวลานัดชมและติดต่อกลับลูกค้า`,

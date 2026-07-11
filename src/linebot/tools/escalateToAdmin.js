@@ -7,7 +7,7 @@
 // returns { escalated: true }, leaving the model to phrase the Thai "we'll have
 // someone get back to you" reply.
 
-import { create } from '../../db/repositories/adminQueue.repo.js'
+import { alertAdmins } from '../adminAlert.service.js'
 
 export const name = 'escalateToAdmin'
 
@@ -104,12 +104,13 @@ export async function handler(args, ctx) {
   try {
     // Capture the user's verbatim message (if provided) inside originalPayload
     // so the admin has full context alongside the model's summary.
-    await create({
+    await alertAdmins({
       lineUserId:      ctx.lineUserId,
       reason,
       summary:         summary.trim(),
       originalPayload: { message: originalMessage ?? null },
     })
+    // (alertAdmins also pushes to the admin Line group if configured)
 
     log.info(
       { tool: name, lineUserId: ctx.lineUserId, reason },

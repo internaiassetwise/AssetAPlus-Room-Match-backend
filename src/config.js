@@ -34,6 +34,12 @@ const schema = z.object({
   // forwarded escalations, system errors, "your listing was approved"
   // pings). Optional.
   LINE_ADMIN_USER_ID:        z.string().optional(),
+  // Line group chat that holds the on-duty admins. When set, admin alerts fan
+  // out to this group too (in addition to /admin/inbox) for faster reaction.
+  // The bot is passive in the group — it only pushes alerts, never replies to
+  // chatter. Get the id by adding the bot to the group (it posts the id on join)
+  // or from the webhook log's source.groupId.
+  LINE_ADMIN_GROUP_ID:        z.string().optional(),
   // Base URLs for the Line APIs. Default to the public Line endpoints;
   // override only when running against a sandbox.
   LINE_API_BASE_URL:  z.string().url().default('https://api.line.me/v2/bot'),
