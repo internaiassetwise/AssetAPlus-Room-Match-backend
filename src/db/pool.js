@@ -11,7 +11,7 @@ const isLocal = /localhost|127\.0\.0\.1|::1/.test(new URL(config.DATABASE_URL).h
 
 export const pool = new Pool({
   connectionString: config.DATABASE_URL,
-  max: 10,
+  max: config.DB_POOL_MAX,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,
   ...(isLocal ? {} : { ssl: { rejectUnauthorized: false } }),

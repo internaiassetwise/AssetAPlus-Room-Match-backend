@@ -24,6 +24,7 @@ import { viewingConfirmation, welcome, menuQuickReply } from './flexMessages.js'
 import { notifyAdminGroup } from './adminAlert.service.js'
 import * as chatSessions from '../db/repositories/chatSessions.repo.js'
 import * as adminQueue from '../db/repositories/adminQueue.repo.js'
+import { enqueue } from './dispatchQueue.service.js'
 
 const SIGNATURE_HEADER = 'x-line-signature'
 
@@ -55,50 +56,66 @@ export async function handleEvent(payload) {
   const { handle, handleImage } = await import('./chatAgent.service.js')
   for (const ev of payload.events) {
     const lineUserId = ev?.source?.userId ?? null
-    const replyToken = ev?.replyToken ?? null
-    const eventType  = ev?.type ?? 'unknown'
-    const messageType = ev?.message?.type ?? null
+    const groupId    = ev?.source?.groupId ?? ev?.source?.roomId ?? null
+    const key        = lineUserId || groupId || '_no_user'
+    // Serialize per user/group (in arrival order), run different users
+    // concurrently up to a global cap. The route has ALREADY acked Line by the
+    // time these jobs run. enqueue swallows errors so one bad event can't break
+    // the chain for that user.
+    enqueue(key, () => processEvent(ev, { handle, handleImage }), 'line-event')
+  }
+}
 
-    await appendWebhook({ lineUserId, replyToken, eventType, event: ev })
-    logger.info({ lineUserId, eventType, messageType }, 'line webhook received')
+/**
+ * Process one webhook event: audit-log it, then dispatch (group handling /
+ * chatAgent / image / postback / follow / live-agent). Runs inside the dispatch
+ * queue, so it is serialized per user. Never throws to the queue (caught here).
+ */
+async function processEvent(ev, { handle, handleImage }) {
+  const lineUserId   = ev?.source?.userId ?? null
+  const replyToken   = ev?.replyToken ?? null
+  const eventType    = ev?.type ?? 'unknown'
+  const messageType  = ev?.message?.type ?? null
 
-    try {
-      const sourceType = ev?.source?.type ?? 'user'
-      const groupId = ev?.source?.groupId ?? ev?.source?.roomId ?? null
+  await appendWebhook({ lineUserId, replyToken, eventType, event: ev })
+  logger.info({ lineUserId, eventType, messageType }, 'line webhook received')
 
-      // In group/room chats the bot is PASSIVE: it only pushes alerts here, it
-      // never replies to chatter or runs the LLM. Surface the group id on join
-      // (and on a "group id" command) so admins can wire up LINE_ADMIN_GROUP_ID.
-      if (sourceType === 'group' || sourceType === 'room') {
-        if (eventType === 'join' && groupId) {
-          await push(groupId, { type: 'text', text:
-            'สวัสดีค่ะ น้องห้องเข้าร่วมกลุ่มแล้ว 🙌\n' +
-            `Group ID ของกลุ่มนี้:\n${groupId}\n\n` +
-            'คัดลอกเลขนี้ไปใส่ LINE_ADMIN_GROUP_ID เพื่อให้แจ้งเตือนเข้ากลุ่มนี้ได้เลยค่ะ' })
-        } else if (eventType === 'message' && messageType === 'text' && groupId) {
-          const t = (ev?.message?.text ?? '').trim().toLowerCase()
-          if (t === 'group id' || t === 'id' || t === 'รหัสกลุ่ม') {
-            await push(groupId, { type: 'text', text: `Group ID: ${groupId}` })
-          }
+  try {
+    const sourceType = ev?.source?.type ?? 'user'
+    const groupId = ev?.source?.groupId ?? ev?.source?.roomId ?? null
+
+    // In group/room chats the bot is PASSIVE: it only pushes alerts here, it
+    // never replies to chatter or runs the LLM. Surface the group id on join
+    // (and on a "group id" command) so admins can wire up LINE_ADMIN_GROUP_ID.
+    if (sourceType === 'group' || sourceType === 'room') {
+      if (eventType === 'join' && groupId) {
+        await push(groupId, { type: 'text', text:
+          'สวัสดีค่ะ น้องห้องเข้าร่วมกลุ่มแล้ว 🙌\n' +
+          `Group ID ของกลุ่มนี้:\n${groupId}\n\n` +
+          'คัดลอกเลขนี้ไปใส่ LINE_ADMIN_GROUP_ID เพื่อให้แจ้งเตือนเข้ากลุ่มนี้ได้เลยค่ะ' })
+      } else if (eventType === 'message' && messageType === 'text' && groupId) {
+        const t = (ev?.message?.text ?? '').trim().toLowerCase()
+        if (t === 'group id' || t === 'id' || t === 'รหัสกลุ่ม') {
+          await push(groupId, { type: 'text', text: `Group ID: ${groupId}` })
         }
-      } else if (eventType === 'message' && messageType === 'text') {
-        if (await routeToLiveAgent(lineUserId, ev)) continue // human owns the chat → skip the LLM
-        await handle(lineUserId, ev?.message?.text ?? '', replyToken)
-      } else if (eventType === 'message' && messageType === 'image') {
-        if (await routeToLiveAgent(lineUserId, ev)) continue
-        await handleImage(lineUserId, ev?.message?.id, replyToken)
-      } else if (eventType === 'postback') {
-        if (await routeToLiveAgent(lineUserId, ev)) continue
-        await handlePostback(lineUserId, ev?.postback?.data)
-      } else if (eventType === 'follow' && lineUserId) {
-        // New friend added the bot — send a welcome + the quick-reply menu so
-        // desktop users (no Rich Menu) immediately see how to get started.
-        await push(lineUserId, { ...welcome(), quickReply: menuQuickReply() })
       }
-      // 'unfollow','leave', etc. → no-op (audit-logged above)
-    } catch (err) {
-      logger.error({ err, lineUserId, eventType, messageType }, 'webhook dispatch failed')
+    } else if (eventType === 'message' && messageType === 'text') {
+      if (await routeToLiveAgent(lineUserId, ev)) return // human owns the chat → skip the LLM
+      await handle(lineUserId, ev?.message?.text ?? '', replyToken)
+    } else if (eventType === 'message' && messageType === 'image') {
+      if (await routeToLiveAgent(lineUserId, ev)) return
+      await handleImage(lineUserId, ev?.message?.id, replyToken)
+    } else if (eventType === 'postback') {
+      if (await routeToLiveAgent(lineUserId, ev)) return
+      await handlePostback(lineUserId, ev?.postback?.data)
+    } else if (eventType === 'follow' && lineUserId) {
+      // New friend added the bot — send a welcome + the quick-reply menu so
+      // desktop users (no Rich Menu) immediately see how to get started.
+      await push(lineUserId, { ...welcome(), quickReply: menuQuickReply() })
     }
+    // 'unfollow','leave', etc. → no-op (audit-logged above)
+  } catch (err) {
+    logger.error({ err, lineUserId, eventType, messageType }, 'webhook dispatch failed')
   }
 }
 

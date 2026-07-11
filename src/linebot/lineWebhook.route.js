@@ -60,15 +60,15 @@ router.post('/', async (req, res) => {
     })
   }
 
-  // Fire-and-forget the dispatch — we want to ack Line ASAP. handleEvent
-  // already swallows its own errors (see lineWebhook.service.js), so this
-  // await never throws under normal conditions. We still wrap in try/catch
-  // as a final safety net.
-  try {
-    await handleEvent(req.body)
-  } catch (err) {
-    logger.error({ err }, 'line webhook dispatch failed (event already persisted)')
-  }
+  // Fire-and-forget: enqueue per-event dispatch and ack Line IMMEDIATELY.
+  // handleEvent only enqueues (per-user serialized, globally capped) and
+  // returns; the actual Gemini/tool work happens in the background. We must NOT
+  // await it — holding the HTTP open through the LLM round-trip would make Line
+  // retry under load and cause duplicate processing. handleEvent + the queue
+  // swallow their own errors; the .catch is a final safety net.
+  handleEvent(req.body).catch((err) => {
+    logger.error({ err }, 'line webhook enqueue failed')
+  })
 
   res.status(200).json({ ok: true })
 })

@@ -11,6 +11,16 @@ const schema = z.object({
   COOKIE_DOMAIN:      z.string().optional(),   // e.g. ".up.railway.app" in prod for cross-subdomain cookies
   MOCK_AUTH:          z.enum(['true', 'false']).default('false'),  // dev-only mock login flag
 
+  // --- Concurrency / throughput -----------------------------------------
+  // Max simultaneous chat turns the bot will process. Different Line users run
+  // concurrently up to this cap; the same user is always serialized (one turn at
+  // a time, in order) so their chat history can't race. Sized against the DB
+  // pool: each turn holds DB connections only during short queries (released
+  // during the Gemini await), so 8 leaves headroom for web/admin traffic.
+  LINE_BOT_MAX_CONCURRENT: z.coerce.number().int().positive().default(8),
+  // Postgres pool size. Bumped from 10 to give headroom when the bot is busy.
+  DB_POOL_MAX:             z.coerce.number().int().positive().default(20),
+
   // --- Gemini API (FAQ embeddings + rephrasing) -------------------------
   // Optional. If absent, /api/faqs and /api/faqs/search return 503 instead
   // of crashing. Admins can still manage FAQs but embedding generation
