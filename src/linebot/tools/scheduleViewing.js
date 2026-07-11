@@ -8,6 +8,7 @@
 
 import { findById } from '../../db/repositories/rooms.repo.js'
 import { openForRoom } from '../../db/repositories/viewingSlots.repo.js'
+import { create as createAdminAlert } from '../../db/repositories/adminQueue.repo.js'
 import { slotCarousel } from '../flexMessages.js'
 
 export const name = 'scheduleViewing'
@@ -44,7 +45,20 @@ export async function handler(args, ctx) {
   const slots = await openForRoom(roomId)
   if (slots.length === 0) {
     logger.info({ tool: name, roomId }, 'scheduleViewing: no open slots')
-    return { hasSlots: false, roomTitle: room.title }
+    // No bookable times → alert the admin so they can open a slot and follow up
+    // with the tenant. Best-effort: a DB failure here must not break the reply.
+    try {
+      await createAdminAlert({
+        lineUserId:      ctx.lineUserId,
+        reason:          'view-a-room',
+        summary:         `ลูกค้าต้องการนัดชมห้อง "${room.title}" (ห้อง #${roomId}) แต่ยังไม่มีช่วงเวลาที่เปิดให้จอง — รบกวนเปิดเวลานัดชมและติดต่อกลับลูกค้า`,
+        originalPayload: { roomId, roomTitle: room.title, want: 'viewing-no-slots' },
+      })
+      logger.info({ tool: name, roomId, lineUserId: ctx.lineUserId }, 'scheduleViewing: admin alerted (no slots)')
+    } catch (err) {
+      logger.error({ err, tool: name, roomId }, 'scheduleViewing: admin alert failed')
+    }
+    return { hasSlots: false, roomTitle: room.title, adminAlerted: true }
   }
 
   logger.info({ tool: name, roomId, slots: slots.length }, 'scheduleViewing: offered slots')
