@@ -57,6 +57,26 @@ function rentText(n) {
   return `฿${v.toLocaleString('en-US')}/เดือน`
 }
 
+/**
+ * Quick Reply chips attached to the bot's replies — a "floating menu" so users
+ * on Line for desktop (who can't see the Rich Menu) always have the main
+ * actions one tap away. Each message-type chip sends a phrase the agent routes
+ * to the right tool; the website chip is a URI (only when WEB_BASE_URL is set).
+ * Returns the `{ items }` object to spread onto a message's `quickReply`.
+ */
+export function menuQuickReply() {
+  const items = [
+    { type: 'action', action: { type: 'message', label: '🔍 หาห้องเช่า',  text: 'ขอดูห้องว่าง' } },
+    { type: 'action', action: { type: 'message', label: '🏠 ลงประกาศ',    text: 'อยากลงประกาษห้อง' } },
+    { type: 'action', action: { type: 'message', label: '📅 นัดชมห้อง',   text: 'อยากนัดชมห้อง' } },
+    { type: 'action', action: { type: 'message', label: '💬 ถามแอดมิน',  text: 'ติดต่อแอดมิน' } },
+  ]
+  if (config.WEB_BASE_URL) {
+    items.push({ type: 'action', action: { type: 'uri', label: '🌐 เว็บไซต์', uri: config.WEB_BASE_URL } })
+  }
+  return { items }
+}
+
 /** A single room as a Flex bubble (hero image + specs + อยากนัดชม/ดูรายละเอียด buttons). */
 export function roomCard(room = {}) {
   const specs = [

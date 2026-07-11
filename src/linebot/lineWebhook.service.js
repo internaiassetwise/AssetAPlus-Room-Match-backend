@@ -20,7 +20,7 @@ import { findById as findRoomById } from '../db/repositories/rooms.repo.js'
 import * as viewingSlots from '../db/repositories/viewingSlots.repo.js'
 import { createForTenant } from '../db/repositories/viewings.repo.js'
 import { findByLineId as findTenantByLineId, createFromBot as createTenantFromBot } from '../db/repositories/tenants.repo.js'
-import { viewingConfirmation } from './flexMessages.js'
+import { viewingConfirmation, welcome, menuQuickReply } from './flexMessages.js'
 
 const SIGNATURE_HEADER = 'x-line-signature'
 
@@ -66,8 +66,12 @@ export async function handleEvent(payload) {
         await handleImage(lineUserId, ev?.message?.id, replyToken)
       } else if (eventType === 'postback') {
         await handlePostback(lineUserId, ev?.postback?.data)
+      } else if (eventType === 'follow' && lineUserId) {
+        // New friend added the bot — send a welcome + the quick-reply menu so
+        // desktop users (no Rich Menu) immediately see how to get started.
+        await push(lineUserId, { ...welcome(), quickReply: menuQuickReply() })
       }
-      // 'follow','unfollow','join','leave', etc. → no-op (audit-logged above)
+      // 'unfollow','join','leave', etc. → no-op (audit-logged above)
     } catch (err) {
       logger.error({ err, lineUserId, eventType, messageType }, 'webhook dispatch failed')
     }

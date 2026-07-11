@@ -32,6 +32,7 @@ import * as tools  from './tools/index.js'
 import * as roomsRepo     from '../db/repositories/rooms.repo.js'
 import * as roomImages    from '../db/repositories/roomImages.repo.js'
 import * as adminQueue    from '../db/repositories/adminQueue.repo.js'
+import { menuQuickReply } from './flexMessages.js'
 
 const MAX_TOOL_ROUNDS = 5
 
@@ -126,7 +127,7 @@ export async function handle(lineUserId, text, _replyToken = null) {
     return null
   }
 
-  await safePush(lineUserId, { type: 'text', text: r.reply })
+  await safePush(lineUserId, { type: 'text', text: r.reply, quickReply: menuQuickReply() })
   for (const msg of r.pushes) await safePush(lineUserId, msg)
 
   logger.info(
