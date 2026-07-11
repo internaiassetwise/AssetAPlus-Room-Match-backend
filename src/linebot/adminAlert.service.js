@@ -39,3 +39,17 @@ export async function alertAdmins({ lineUserId, reason, summary, originalPayload
   }
   return row
 }
+
+/**
+ * Push an arbitrary heads-up to the admin Line group (when configured). Unlike
+ * alertAdmins, this does NOT create an admin_queue ticket — use it for things
+ * that already have their own admin page (e.g. a new booking → /admin/viewings,
+ * a new pending listing → /admin/pending-listings). Best-effort, never throws.
+ */
+export function notifyAdminGroup(text) {
+  const groupId = config.LINE_ADMIN_GROUP_ID
+  if (!groupId || !lineMessaging.isConfigured()) return
+  lineMessaging.pushMessage(groupId, { type: 'text', text }).catch((err) => {
+    logger.error({ err, groupId }, 'admin group push failed')
+  })
+}

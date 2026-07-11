@@ -12,6 +12,7 @@ import { findByLineId, createFromBot } from '../../db/repositories/landlords.rep
 import { findByName, findAll } from '../../db/repositories/zones.repo.js'
 import { createPending } from '../../db/repositories/rooms.repo.js'
 import { listingFormCard, pendingListing } from '../flexMessages.js'
+import { notifyAdminGroup } from '../adminAlert.service.js'
 
 export const name = 'createRoomDraft'
 
@@ -103,6 +104,7 @@ export async function handler(args, ctx) {
   })
 
   log.info({ roomId: room.id, zoneId: zone.id, monthlyRent: args.monthlyRent }, 'pending room draft created')
+  notifyAdminGroup(`🏠 [ประกาศใหม่รออนุมัติ]\n"${args.title}"\n— อนุมัติ/ปฏิเสธได้ที่ /admin/pending-listings`)
 
   // 5. Return the id + title + pending status. _push is a private key the
   //    agent loop strips before forwarding the result to Gemini, so it does

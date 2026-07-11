@@ -23,6 +23,7 @@ import * as roomImages  from '../db/repositories/roomImages.repo.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { notifyAdminGroup } from '../linebot/adminAlert.service.js'
 
 export const liff = Router()
 
@@ -282,6 +283,8 @@ liff.post('/listing/submit', photoUpload.array('photos', 10), asyncHandler(async
       await roomImages.create(room.id, publicUrl, fileName)
     }
   }
+
+  notifyAdminGroup(`🏠 [ประกาศใหม่รออนุมัติ]\n"${title}"\n— อนุมัติ/ปฏิเสธได้ที่ /admin/pending-listings`)
 
   return res.status(201).json({ ok: true, roomId: room.id })
 }))

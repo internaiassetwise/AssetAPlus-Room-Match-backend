@@ -21,6 +21,7 @@ import * as viewingSlots from '../db/repositories/viewingSlots.repo.js'
 import { createForTenant } from '../db/repositories/viewings.repo.js'
 import { findByLineId as findTenantByLineId, createFromBot as createTenantFromBot } from '../db/repositories/tenants.repo.js'
 import { viewingConfirmation, welcome, menuQuickReply } from './flexMessages.js'
+import { notifyAdminGroup } from './adminAlert.service.js'
 
 const SIGNATURE_HEADER = 'x-line-signature'
 
@@ -157,6 +158,7 @@ async function bookSlot(lineUserId, slotId) {
     viewingId:    viewing.id,
   }))
   logger.info({ lineUserId, roomId: slot.roomId, viewingId: viewing.id, slotId }, 'slot booked via postback')
+  notifyAdminGroup(`📅 [จองนัดชม]\nลูกค้าจองนัดชมห้อง "${room?.title ?? ''}" เวลา ${bangkokDisplay(slot.startsAt)}\nสถานะ: รอแอดมินยืนยัน\n— ยืนยัน/ปฏิเสธได้ที่ /admin/viewings`)
 }
 
 function bangkokDisplay(iso) {
