@@ -122,3 +122,22 @@ export async function createFromBot(lineUserId) {
   )
   return findById(rows[0].id)
 }
+
+/**
+ * Capture the Line display name on webapp login. Same rule as tenants: promote
+ * the "Line user <id>" bot placeholder to the real Line name, but never clobber
+ * a name an admin has already captured (landlords often have their real name +
+ * company set by an admin). Landlords have no picture column, so only the name
+ * is touched.
+ */
+export async function refreshFromLine(landlordId, { displayName } = {}) {
+  const name = displayName && String(displayName).trim() ? String(displayName).trim() : null
+  await query(
+    `UPDATE landlords
+        SET full_name  = CASE WHEN full_name LIKE 'Line user %' AND $2 IS NOT NULL
+                              THEN $2 ELSE full_name END,
+            updated_at = NOW()
+      WHERE id = $1`,
+    [landlordId, name],
+  )
+}

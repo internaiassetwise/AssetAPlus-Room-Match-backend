@@ -99,3 +99,25 @@ export async function createFromBot(lineUserId) {
   )
   return rows[0]
 }
+
+/**
+ * Capture the Line display name + profile picture on webapp login.
+ *
+ * The bot stubs a tenant as "Line user <id>" because full_name is NOT NULL; on
+ * first webapp login we promote that placeholder to the real Line displayName.
+ * We deliberately do NOT overwrite a name that was ever set to something else
+ * (an admin capture or a MatchForm edit) — the name is user-owned, Line only
+ * fills the blank. picture_url refreshes on every login (cheap, always current).
+ */
+export async function refreshFromLine(tenantId, { displayName, pictureUrl } = {}) {
+  const name = displayName && String(displayName).trim() ? String(displayName).trim() : null
+  await pool.query(
+    `UPDATE tenants
+        SET full_name   = CASE WHEN full_name LIKE 'Line user %' AND $2 IS NOT NULL
+                               THEN $2 ELSE full_name END,
+            picture_url = COALESCE($3, picture_url),
+            updated_at  = NOW()
+      WHERE id = $1`,
+    [tenantId, name, pictureUrl || null],
+  )
+}

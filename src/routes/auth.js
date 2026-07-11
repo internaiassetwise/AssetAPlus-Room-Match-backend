@@ -314,6 +314,13 @@ auth.get('/line/callback', asyncHandler(async (req, res) => {
     else                     tenant   = await tenants.createFromBot(lineUserId)
   }
 
+  // Capture the Line display name (+ picture) as the user's webapp name. Only
+  // promotes the bot's "Line user <id>" placeholder — never clobbers a name an
+  // admin/user already set — and refreshes the tenant's picture every login.
+  const lineProfile = { displayName: profile.displayName, pictureUrl: profile.pictureUrl }
+  if (tenant)   await tenants.refreshFromLine(tenant.id, lineProfile)
+  if (landlord) await landlords.refreshFromLine(landlord.id, lineProfile)
+
   if (tenant) {
     const s = await userSessions.createUserSession(tenant.id)
     setSessionCookie(res, USER_COOKIE, s.token, s.expiresAt)
