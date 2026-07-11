@@ -11,19 +11,24 @@
 // downstream handlers can persist the bot caller (e.g. "created from Line
 // chat by U…") for auditing.
 
+import { createHmac, timingSafeEqual } from 'node:crypto'
 import { AppError } from './AppError.js'
 
 export const BOT_SECRET_HEADER = 'x-bot-secret'
 
 /**
- * Constant-time string compare. Avoids leaking length via early return.
+ * Constant-time compare that does NOT leak the secret's length: HMAC both
+ * values to equal-length digests, then timingSafeEqual those. (A direct
+ * timingSafeEqual on raw strings would still need a length pre-check.)
  */
 function safeEqual(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string') return false
-  if (a.length !== b.length) return false
-  let diff = 0
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  return diff === 0
+  if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false
+  const mac = (s) => createHmac('sha256', s).update('roommatch-requirebot').digest()
+  try {
+    return timingSafeEqual(mac(a), mac(b))
+  } catch {
+    return false
+  }
 }
 
 export function requireBot(req, _res, next) {

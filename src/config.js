@@ -11,6 +11,11 @@ const schema = z.object({
   COOKIE_DOMAIN:      z.string().optional(),   // e.g. ".up.railway.app" in prod for cross-subdomain cookies
   MOCK_AUTH:          z.enum(['true', 'false']).default('false'),  // dev-only mock login flag
 
+  // Line debug routes (/api/line/debug/*) let a caller push arbitrary Line
+  // messages / drive the agent as any user. Off by default in EVERY env (so a
+  // publicly-reachable staging deploy can't abuse them); set 'true' in local dev.
+  ENABLE_LINE_DEBUG:  z.enum(['true', 'false']).default('false'),
+
   // --- Concurrency / throughput -----------------------------------------
   // Max simultaneous chat turns the bot will process. Different Line users run
   // concurrently up to this cap; the same user is always serialized (one turn at

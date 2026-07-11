@@ -80,6 +80,9 @@ auth.post('/login', validate({ body: loginBody }), asyncHandler(async (req, res)
   const { username, password } = req.body
   const admin = await admins.findByUsername(username)
   if (!admin || !admin.is_active) {
+    // Burn time on a dummy bcrypt compare so this path takes roughly as long as
+    // the "wrong password" path below — closes username enumeration via timing.
+    await admins.verifyPassword(password, admins.DUMMY_HASH).catch(() => {})
     throw new AppError(401, 'AUTH_BAD_CREDENTIALS', 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง')
   }
   const ok = await admins.verifyPassword(password, admin.password_hash)

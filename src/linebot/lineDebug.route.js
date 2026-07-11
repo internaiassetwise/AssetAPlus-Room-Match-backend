@@ -22,7 +22,7 @@
 
 import { Router } from 'express'
 import { z } from 'zod'
-import { isProd } from '../config.js'
+import { isProd, config } from '../config.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate }     from '../middleware/validate.js'
 import { AppError }     from '../middleware/AppError.js'
@@ -30,12 +30,15 @@ import * as line from './lineMessaging.service.js'
 
 export const lineDebug = Router()
 
-if (isProd) {
-  // Production: mount a single 404 so the route shape is consistent
-  // (the URL still exists) but nothing works.
+// Debug routes can push arbitrary Line messages / drive the agent as any user,
+// so they're disabled unless BOTH (a) not production AND (b) explicitly opted-in
+// via ENABLE_LINE_DEBUG=true — protects any publicly-reachable staging deploy.
+if (isProd || config.ENABLE_LINE_DEBUG !== 'true') {
+  // Mount a single 404 so the route shape is consistent (the URL still exists)
+  // but nothing works.
   lineDebug.all('/*', (_req, _res, next) => {
     next(new AppError(404, 'LINE_DEBUG_DISABLED',
-      'debug routes are disabled in production'))
+      'debug routes are disabled (set ENABLE_LINE_DEBUG=true in a non-prod env)'))
   })
 } else {
   // ----- push ------------------------------------------------------------

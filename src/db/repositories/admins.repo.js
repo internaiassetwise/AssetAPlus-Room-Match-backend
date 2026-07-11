@@ -4,6 +4,15 @@ import bcrypt from 'bcryptjs'
 import { pool } from '../pool.js'
 import { logger } from '../../logger.js'
 
+// Bcrypt cost for newly-hashed passwords. 12 is the current OWASP minimum
+// recommendation (the old value was 10). Existing hashes keep their own cost.
+export const BCRYPT_COST = 12
+
+// A throwaway hash compared on the login path when the username doesn't exist,
+// so "no such user" and "wrong password" take comparable time (closes username
+// enumeration via timing). Never matches a real password that matters.
+export const DUMMY_HASH = bcrypt.hashSync('roommatch-nonexistent-account', BCRYPT_COST)
+
 /**
  * Ensure a single bootstrap admin exists. Reads ADMIN_USERNAME / ADMIN_PASSWORD
  * from env. Idempotent: skips when an admin row already exists (or env is unset).
@@ -15,7 +24,7 @@ export async function ensureBootstrapAdmin({ username, password }) {
   }
   const { rowCount } = await pool.query('SELECT 1 FROM admins LIMIT 1')
   if (rowCount > 0) return
-  const hash = await bcrypt.hash(password, 10)
+  const hash = await bcrypt.hash(password, BCRYPT_COST)
   await pool.query(
     `INSERT INTO admins (username, password_hash) VALUES ($1, $2)
      ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash`,

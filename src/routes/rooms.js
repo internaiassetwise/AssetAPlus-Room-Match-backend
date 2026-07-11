@@ -45,7 +45,7 @@ const idParam = z.object({ id: z.coerce.number().int().positive() })
 const slotBody = z.object({ startsAt: z.string().refine((v) => !Number.isNaN(Date.parse(v)), { message: 'รูปแบบวันที่ไม่ถูกต้อง' }) })
 
 rooms.get('/', validate({ query: listQuery }), asyncHandler(async (req, res) => {
-  res.json(await repo.findAvailable(req.query))
+  res.json((await repo.findAvailable(req.query)).map(publicRoom))
 }))
 
 // ----- Admin approval flow (Phase 5) — /pending before /:id ---------------
@@ -61,8 +61,19 @@ rooms.get('/:id', validate({ params: idParam }), asyncHandler(async (req, res) =
   // Attach the full photo gallery (room_images, sorted). `room.image` is only
   // the first photo; the gallery + lightbox need the whole set.
   const photos = (await roomImages.findByRoom(req.params.id)).map((p) => p.url)
-  res.json({ ...room, photos })
+  res.json({ ...publicRoom(room), photos })
 }))
+
+/**
+ * Drop internal/PII fields before returning a room to a PUBLIC (unauthenticated)
+ * reader: the landlord's Line userId (createdByLineUserId) is an identity key,
+ * and approvedBy leaks an admin username. Admin routes still get the full row.
+ */
+function publicRoom(room) {
+  if (!room) return room
+  const { createdByLineUserId, approvedBy, ...rest } = room
+  return rest
+}
 
 // ----- Viewing slots (Phase 6) ---------------------------------------------
 // GET is public (the bot + anyone browsing can see open times); writes are admin.

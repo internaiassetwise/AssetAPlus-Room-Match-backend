@@ -22,9 +22,12 @@ export function createApp() {
   // req.ip is the proxy address (breaking any future IP-based rate limit).
   app.set('trust proxy', 1)
 
-  // Per-request id (for log correlation; surfaced in error JSON too)
+  // Per-request id (for log correlation; surfaced in error JSON too). Only
+  // trust a client-supplied X-Request-Id if it looks like a safe id — otherwise
+  // the client could forge/log-spam arbitrary strings into structured logs.
   app.use((req, _res, next) => {
-    req.id = req.headers['x-request-id'] || randomUUID()
+    const sent = req.headers['x-request-id']
+    req.id = (typeof sent === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(sent)) ? sent : randomUUID()
     next()
   })
 

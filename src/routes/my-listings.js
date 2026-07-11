@@ -50,7 +50,6 @@ const writeBody = z.object({
   status:        z.enum(['available', 'reserved', 'matched', 'inactive']).optional(),
   availableFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง').optional().or(z.literal('')),
   amenities:     z.array(z.string().trim().min(1)).max(50).optional(),
-  isFeatured:    z.boolean().optional(),
   lat:           z.coerce.number().min(-90).max(90).optional(),
   lng:           z.coerce.number().min(-180).max(180).optional(),
   address:       z.string().trim().max(300).optional().or(z.literal('')),

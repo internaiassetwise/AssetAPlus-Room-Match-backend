@@ -96,10 +96,14 @@ export function flushOidcCookies(req, res) {
   }
 }
 
-/** Sanitize the ?return= query param — only allow same-origin paths. */
+/** Sanitize the ?return= query param — only allow same-origin relative paths.
+ *  Blocks protocol-relative URLs (//host), backslash variants (/\host, which
+ *  some browsers normalize to //host → off-site redirect), and percent-encoded
+ *  sequences (%2F) that could evade the checks. */
 export function sanitizeReturn(value) {
   if (typeof value !== 'string') return '/'
-  // Block any kind of protocol-relative or absolute URL — only paths allowed.
-  if (!value.startsWith('/') || value.startsWith('//')) return '/'
-  return value
+  const v = value.trim()
+  if (!v.startsWith('/') || v.startsWith('//')) return '/'
+  if (/[\\%]/.test(v)) return '/'
+  return v
 }
