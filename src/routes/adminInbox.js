@@ -40,6 +40,14 @@ async function withLive(items) {
   return items.map((it) => ({ ...it, isLive: live.has(`${it.lineUserId}|${it.id}`) }))
 }
 
+/** Single-row version — used by action endpoints so the client keeps isLive
+ *  fresh after a reply/takeover (otherwise the live-poll in the UI stops). */
+async function withLiveOne(row) {
+  if (!row) return row
+  const live = new Set(await chatSessions.listLive())
+  return { ...row, isLive: live.has(`${row.lineUserId}|${row.id}`) }
+}
+
 /** Best-effort push to a user's Line; throws AppError(502) so the admin can retry. */
 async function pushToUser(lineUserId, text) {
   if (!lineMessaging.isConfigured()) return
@@ -92,16 +100,17 @@ adminInbox.post('/:id/reply', requireAdmin,
     if (live) {
       // Live takeover: append the admin turn to the running thread and keep the
       // ticket open so the back-and-forth can continue.
-      return res.json(await repo.appendThread(item.id, {
+      const updated = await repo.appendThread(item.id, {
         role: 'admin', text: req.body.reply, ts: new Date().toISOString(),
-      }))
+      })
+      return res.json(await withLiveOne(updated))
     }
 
     // One-shot async reply (ticket not live): single admin_reply, status→replied.
     if (item.status !== 'open') {
       throw new AppError(409, 'ALREADY_HANDLED', `รายการนี้ถูกจัดการแล้ว (status=${item.status})`)
     }
-    res.json(await repo.markReplied(item.id, { adminReply: req.body.reply }))
+    res.json(await withLiveOne(await repo.markReplied(item.id, { adminReply: req.body.reply })))
   }),
 )
 
@@ -125,7 +134,7 @@ adminInbox.post('/:id/takeover', requireAdmin, validate({ params: idParam }),
     notifyAdminGroup(
       `🙋 [แอดมินรับเรื่อง]\n${item.summary || '(ไม่มีรายละเอียด)'}\n— ตอบได้ที่ /admin/inbox`,
     )
-    res.json(await repo.findById(item.id))
+    res.json(await withLiveOne(await repo.findById(item.id)))
   }),
 )
 
@@ -136,7 +145,7 @@ adminInbox.post('/:id/release', requireAdmin, validate({ params: idParam }),
     await chatSessions.endTakeover(item.lineUserId)
     const updated = await repo.markResolved(item.id)
     await pushToUser(item.lineUserId, NOTICE_RELEASE)
-    res.json(updated)
+    res.json(await withLiveOne(updated))
   }),
 )
 
