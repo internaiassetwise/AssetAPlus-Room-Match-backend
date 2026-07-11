@@ -4,6 +4,7 @@ import { z } from 'zod'
 import * as repo from '../db/repositories/contact.repo.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate } from '../middleware/validate.js'
+import { rateLimit } from '../middleware/rateLimit.js'
 
 export const contact = Router()
 
@@ -14,7 +15,9 @@ const body = z.object({
   message: z.string().trim().max(2000).optional().or(z.literal('')),
 })
 
-contact.post('/', validate({ body }), asyncHandler(async (req, res) => {
+contact.post('/',
+  rateLimit({ windowMs: 60 * 1000, max: 5, message: 'ส่งข้อความบ่อยเกินไป กรุณารอสักครู่' }),
+  validate({ body }), asyncHandler(async (req, res) => {
   const id = await repo.create({ ...req.body, source: req.headers.referer || 'unknown' })
   res.status(201).json({ ok: true, id })
 }))

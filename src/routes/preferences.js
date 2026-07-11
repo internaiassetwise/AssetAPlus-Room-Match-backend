@@ -12,6 +12,7 @@ import * as tenants from '../db/repositories/tenants.repo.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate }     from '../middleware/validate.js'
 import { requireUser }  from '../auth/middleware.js'
+import { rateLimit }    from '../middleware/rateLimit.js'
 
 export const preferences = Router()
 
@@ -27,7 +28,9 @@ const landlordBody = z.object({
   note:         z.string().trim().max(1000).optional().or(z.literal('')),
 })
 
-preferences.post('/', validate({ body: landlordBody }), asyncHandler(async (req, res) => {
+preferences.post('/',
+  rateLimit({ windowMs: 60 * 1000, max: 10, message: 'ส่งบ่อยเกินไป กรุณารอสักครู่' }),
+  validate({ body: landlordBody }), asyncHandler(async (req, res) => {
   const id = await repo.createLandlordPreference(req.body)
   res.status(201).json({ ok: true, id })
 }))

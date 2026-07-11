@@ -30,6 +30,7 @@ import { asyncHandler }        from '../middleware/_asyncHandler.js'
 import { validate }            from '../middleware/validate.js'
 import { AppError }            from '../middleware/AppError.js'
 import { requireAdmin, ADMIN_COOKIE, readCookie } from '../middleware/requireAdmin.js'
+import { rateLimit } from '../middleware/rateLimit.js'
 import { googleClient, azureClient } from '../auth/oidc.js'
 import { signState, verifyState } from '../auth/stateToken.js'
 import {
@@ -76,7 +77,9 @@ const loginBody = z.object({
   password: z.string().min(1, 'กรุณากรอกรหัสผ่าน').max(200),
 })
 
-auth.post('/login', validate({ body: loginBody }), asyncHandler(async (req, res) => {
+auth.post('/login',
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 20, message: 'พยายามเข้าสู่ระบบบ่อยเกินไป กรุณารอสักครู่แล้วลองใหม่' }),
+  validate({ body: loginBody }), asyncHandler(async (req, res) => {
   const { username, password } = req.body
   const admin = await admins.findByUsername(username)
   if (!admin || !admin.is_active) {

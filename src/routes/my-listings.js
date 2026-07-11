@@ -18,6 +18,7 @@ import { z } from 'zod'
 import multer from 'multer'
 import * as repo from '../db/repositories/rooms.repo.js'
 import * as landlordRepo from '../db/repositories/landlords.repo.js'
+import { detectImageExt } from '../services/fileSignature.service.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate }     from '../middleware/validate.js'
 import { requireBot }   from '../middleware/requireBot.js'
@@ -197,10 +198,13 @@ myListings.post('/:id/photos', requireBot, photoUpload.single('photo'),
     const path = await import('node:path')
     const crypto = await import('node:crypto')
 
-    const ext = path.extname(req.file.originalname || '') ||
-                (req.file.mimetype?.startsWith('image/png')  ? '.png' :
-                 req.file.mimetype?.startsWith('image/webp') ? '.webp' :
-                 req.file.mimetype?.startsWith('image/gif')  ? '.gif' : '.jpg')
+    // Derive the extension from the ACTUAL bytes — filename + Content-Type are
+    // client-controlled, so trusting them allowed content-type confusion (a
+    // .html/.svg served from the API origin = stored XSS). Reject non-images.
+    const ext = detectImageExt(req.file.buffer)
+    if (!ext) {
+      throw new AppError(400, 'BAD_IMAGE', 'ไฟล์ไม่ใช่รูปภาพที่รองรับ (รองรับ jpg/png/webp/gif)')
+    }
     const fileName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`
     const dir = path.join(process.cwd(), 'uploads', 'rooms', String(roomId))
     await fs.mkdir(dir, { recursive: true })

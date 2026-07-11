@@ -15,6 +15,8 @@ import { Router } from 'express'
 import multer from 'multer'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { AppError }     from '../middleware/AppError.js'
+import { rateLimit }    from '../middleware/rateLimit.js'
+import { detectImageExt } from '../services/fileSignature.service.js'
 import { config } from '../config.js'
 import * as landlords   from '../db/repositories/landlords.repo.js'
 import { findByName }   from '../db/repositories/zones.repo.js'
@@ -31,7 +33,7 @@ export const liff = Router()
 // my-listings.js: 10 MB cap per image, images only.
 const photoUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 5 * 1024 * 1024 },   // 5 MB cap (was 10) — limits per-request memory
   fileFilter: (_req, file, cb) => {
     if (!file.mimetype.startsWith('image/')) {
       return cb(new AppError(400, 'BAD_MIME', 'ต้องเป็นไฟล์รูปภาพ'))
@@ -189,7 +191,10 @@ function renderListingHtml(liffId, submitUrl) {
       setLoading(true);
       statusEl.className = 'status';
       var fd = new FormData(form);
-      fetch(SUBMIT_URL, { method: 'POST', body: fd })
+      // Send the LIFF access token so the server verifies our identity — the
+      // hidden lineUserId field is no longer trusted on its own.
+      var token = (typeof liff !== 'undefined' && liff.getAccessToken) ? liff.getAccessToken() : '';
+      fetch(SUBMIT_URL, { method: 'POST', body: fd, headers: token ? { 'X-Liff-Token': token } : {} })
         .then(function (res) {
           if (!res.ok) {
             return res.json().then(function (body) {
@@ -223,12 +228,14 @@ liff.get('/listing', (req, res) => {
 
 // POST /listing/submit — receive the form, create a pending room + photos.
 // Photos arrive as multipart/form-data field "photos" (max 10, images only).
-liff.post('/listing/submit', photoUpload.array('photos', 10), asyncHandler(async (req, res) => {
-  // lineUserId is supplied by the LIFF page from the in-app profile.
-  const lineUserId = req.body.lineUserId
-  if (!lineUserId) {
-    throw new AppError(400, 'NO_LINE_USER', 'ไม่สามารถระบุตัวตน Line ได้ กรุณาเปิดฟอร์มนี้ใน Line')
-  }
+liff.post('/listing/submit',
+  rateLimit({ windowMs: 10 * 60 * 1000, max: 10, message: 'ส่งประกาศบ่อยเกินไป กรุณารอสักครู่' }),
+  photoUpload.array('photos', 8), asyncHandler(async (req, res) => {
+  // Verify the caller's Line identity SERVER-SIDE from the LIFF access token.
+  // We must NOT trust a client-sent lineUserId — anyone could spoof it to file
+  // listings (or spam the admin queue) as another user.
+  const token = req.headers['x-liff-token'] || req.body.accessToken
+  const lineUserId = await verifyLiffToken(token)
 
   // Find-or-create the landlord from their Line userId (admin fills in name/
   // phone later). Mirrors the bot flow in my-listings.js.
@@ -277,7 +284,11 @@ liff.post('/listing/submit', photoUpload.array('photos', 10), asyncHandler(async
     const dir = path.join(process.cwd(), 'uploads', 'rooms', String(room.id))
     await fs.mkdir(dir, { recursive: true })
     for (const file of req.files) {
-      const fileName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${extFromMimetype(file.mimetype)}`
+      // Ext from actual bytes, not the client mimetype/filename (content-type
+      // confusion → stored XSS). Skip anything that isn't a supported image.
+      const ext = detectImageExt(file.buffer)
+      if (!ext) continue
+      const fileName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`
       await fs.writeFile(path.join(dir, fileName), file.buffer)
       const origin = (config.APP_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '')
       const publicUrl = `${origin}/uploads/rooms/${room.id}/${fileName}`
@@ -290,10 +301,37 @@ liff.post('/listing/submit', photoUpload.array('photos', 10), asyncHandler(async
   return res.status(201).json({ ok: true, roomId: room.id })
 }))
 
-/** Extension derived from the upload's mimetype (default jpg). */
-function extFromMimetype(mimetype = '') {
-  if (mimetype.includes('png'))  return '.png'
-  if (mimetype.includes('webp')) return '.webp'
-  if (mimetype.includes('gif'))  return '.gif'
-  return '.jpg'
+/**
+ * Verify a LIFF access token server-side and return the caller's real Line
+ * userId. Checks the token is valid + issued for our LINE Login channel, then
+ * resolves the profile. Throws AppError(401) on any failure. This replaces
+ * trusting a client-supplied lineUserId (which was spoofable).
+ */
+async function verifyLiffToken(token) {
+  if (!token || typeof token !== 'string') {
+    throw new AppError(401, 'NO_LIFF_TOKEN', 'ไม่พบ Line token กรุณาเปิดฟอร์มนี้ใน Line')
+  }
+  // 1. Is the token valid, and is it for OUR channel?
+  const verifyRes = await fetch(
+    `https://api.line.me/oauth2/v2.1/verify?access_token=${encodeURIComponent(token)}`,
+  )
+  if (!verifyRes.ok) {
+    throw new AppError(401, 'LINE_TOKEN_INVALID', 'Line token ไม่ถูกต้องหรือหมดอายุ กรุณาเปิดฟอร์มใหม่ใน Line')
+  }
+  const verified = await verifyRes.json()
+  if (config.LINE_LOGIN_CHANNEL_ID && verified.client_id !== config.LINE_LOGIN_CHANNEL_ID) {
+    throw new AppError(401, 'LINE_TOKEN_WRONG_CHANNEL', 'Line token ไม่ใช่ของช่องนี้')
+  }
+  // 2. Resolve the profile → the real, unforgeable userId.
+  const profRes = await fetch('https://api.line.me/v2/profile', {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!profRes.ok) {
+    throw new AppError(401, 'LINE_PROFILE_FAILED', 'ดึงโปรไฟล์ Line ไม่สำเร็จ')
+  }
+  const profile = await profRes.json()
+  if (!profile.userId) {
+    throw new AppError(401, 'LINE_NO_USER', 'ไม่พบ Line user id')
+  }
+  return profile.userId
 }
