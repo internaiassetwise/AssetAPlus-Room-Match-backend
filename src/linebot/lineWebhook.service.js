@@ -138,7 +138,9 @@ async function routeToLiveAgent(lineUserId, ev) {
   } catch (err) {
     logger.error({ err, lineUserId, ticketId: state.activeTicketId }, 'live-agent thread append failed')
   }
-  notifyAdminGroup(`💬 [ลูกค้าตอบกลับ]\n${label}`)
+  // Note: we intentionally do NOT push the user's message to the admin group —
+  // the conversation lives in the inbox thread (polled by the UI). The group only
+  // gets the escalation ping + the one-time "@admin รับเรื่องแล้ว" on accept.
   return true
 }
 

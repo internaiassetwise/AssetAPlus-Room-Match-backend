@@ -98,6 +98,13 @@ adminInbox.post('/:id/reply', requireAdmin,
     await pushToUser(item.lineUserId, req.body.reply)
 
     if (live) {
+      // First admin to engage claims the chat → record who answered and announce
+      // once in the group (so the team can see who picked it up).
+      const admin = req.admin?.username || null
+      if (admin && !hs.takenOverBy) {
+        await chatSessions.claim(item.lineUserId, admin)
+        notifyAdminGroup(`🙋 @${admin} รับเรื่อง "${item.summary || ''}" แล้ว`)
+      }
       // Live takeover: append the admin turn to the running thread and keep the
       // ticket open so the back-and-forth can continue.
       const updated = await repo.appendThread(item.id, {
@@ -125,15 +132,12 @@ adminInbox.post('/:id/takeover', requireAdmin, validate({ params: idParam }),
     const item = await repo.findById(req.params.id)
     if (!item) throw new AppError(404, 'INQUIRY_NOT_FOUND', 'ไม่พบรายการนี้')
 
+    const admin = req.admin?.username || req.admin?.id || null
     await repo.reopen(item.id)
-    await chatSessions.beginTakeover(item.lineUserId, {
-      ticketId: item.id,
-      adminId:  req.admin?.username || req.admin?.id || null,
-    })
+    await chatSessions.beginTakeover(item.lineUserId, { ticketId: item.id, adminId: admin })
     await pushToUser(item.lineUserId, NOTICE_TAKEOVER)
-    notifyAdminGroup(
-      `🙋 [แอดมินรับเรื่อง]\n${item.summary || '(ไม่มีรายละเอียด)'}\n— ตอบได้ที่ /admin/inbox`,
-    )
+    // Announce WHO accepted, so the team can track which admin is handling it.
+    notifyAdminGroup(`🙋 @${admin || 'แอดมิน'} รับเรื่อง "${item.summary || ''}" แล้ว`)
     res.json(await withLiveOne(await repo.findById(item.id)))
   }),
 )

@@ -156,14 +156,36 @@ export async function deleteExpired() {
 // user's messages to the linked admin_queue ticket's `thread` instead of the
 // LLM. `active_ticket_id` is the live conversation the user is appended to.
 
-/** Read just the handler state for a user. Defaults to {ai, null} if no row. */
+/** Read just the handler state for a user. Defaults to {ai, null, null}. */
 export async function getHandlerState(lineUserId) {
   const { rows } = await query(
-    `SELECT handler, active_ticket_id FROM chat_sessions WHERE line_user_id = $1`,
+    `SELECT handler, active_ticket_id, taken_over_by FROM chat_sessions WHERE line_user_id = $1`,
     [lineUserId],
   )
-  if (!rows[0]) return { handler: 'ai', activeTicketId: null }
-  return { handler: rows[0].handler ?? 'ai', activeTicketId: rows[0].active_ticket_id ?? null }
+  if (!rows[0]) return { handler: 'ai', activeTicketId: null, takenOverBy: null }
+  return {
+    handler:        rows[0].handler ?? 'ai',
+    activeTicketId: rows[0].active_ticket_id ?? null,
+    takenOverBy:    rows[0].taken_over_by ?? null,
+  }
+}
+
+/**
+ * Record the admin who first engaged a live chat ("claimed" it). Only sets when
+ * not already claimed — the first admin to รับเรื่อง or to reply owns it, which
+ * is how we track who answered. Returns the resulting taken_over_by value.
+ */
+export async function claim(lineUserId, adminId) {
+  const { rows } = await query(
+    `UPDATE chat_sessions
+        SET taken_over_by = COALESCE(taken_over_by, $2),
+            taken_over_at = COALESCE(taken_over_at, NOW()),
+            updated_at    = NOW()
+      WHERE line_user_id = $1
+      RETURNING taken_over_by`,
+    [lineUserId, adminId ?? null],
+  )
+  return rows[0]?.taken_over_by ?? null
 }
 
 /**
