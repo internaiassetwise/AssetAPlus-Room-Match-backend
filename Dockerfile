@@ -33,8 +33,15 @@ COPY --from=prod-deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
 COPY src/ ./src/
 
+# uploads/ is written at runtime (room photos) — create it owned by the
+# non-root `node` user the image ships, then drop privileges.
+RUN mkdir -p uploads && chown -R node:node /app
+USER node
+
 EXPOSE 4000
 
 # Run the migration step at container start, then the server.
-# `--reset` is gated by RESET_DB env to keep it explicit in production.
-CMD ["sh", "-c", "if [ \"$RESET_DB\" = \"1\" ]; then node src/db/init.js --reset; else node src/db/init.js; fi && node src/server.js"]
+# A destructive `--reset` (DROP SCHEMA) requires RESET_DB=confirm-wipe — a
+# deliberate value, so a stray "1"/"true" (env typo, leaked var) can't wipe the
+# production database on the next boot/restart.
+CMD ["sh", "-c", "if [ \"$RESET_DB\" = \"confirm-wipe\" ]; then node src/db/init.js --reset; else node src/db/init.js; fi && node src/server.js"]
