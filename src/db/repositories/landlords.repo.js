@@ -134,8 +134,8 @@ export async function refreshFromLine(landlordId, { displayName } = {}) {
   const name = displayName && String(displayName).trim() ? String(displayName).trim() : null
   await query(
     `UPDATE landlords
-        SET full_name  = CASE WHEN full_name LIKE 'Line user %' AND $2 IS NOT NULL
-                              THEN $2 ELSE full_name END,
+        SET full_name  = CASE WHEN full_name LIKE 'Line user %' AND $2::text IS NOT NULL
+                              THEN $2::text ELSE full_name END,
             updated_at = NOW()
       WHERE id = $1`,
     [landlordId, name],

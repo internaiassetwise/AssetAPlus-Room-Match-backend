@@ -113,8 +113,8 @@ export async function refreshFromLine(tenantId, { displayName, pictureUrl } = {}
   const name = displayName && String(displayName).trim() ? String(displayName).trim() : null
   await pool.query(
     `UPDATE tenants
-        SET full_name   = CASE WHEN full_name LIKE 'Line user %' AND $2 IS NOT NULL
-                               THEN $2 ELSE full_name END,
+        SET full_name   = CASE WHEN full_name LIKE 'Line user %' AND $2::text IS NOT NULL
+                               THEN $2::text ELSE full_name END,
             picture_url = COALESCE($3, picture_url),
             updated_at  = NOW()
       WHERE id = $1`,
