@@ -5,8 +5,13 @@ import * as repo from '../db/repositories/landlords.repo.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate } from '../middleware/validate.js'
 import { AppError } from '../middleware/AppError.js'
+import { requireAdmin } from '../middleware/requireAdmin.js'
 
 export const landlords = Router()
+
+// Landlord directory + edits are admin-only: the list exposes every landlord's
+// phone/email/Line ID/tax ID, and PATCH can deactivate or rewrite any landlord.
+landlords.use(requireAdmin)
 
 const listQuery = z.object({
   isActive: z.coerce.boolean().optional(),

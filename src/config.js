@@ -84,7 +84,14 @@ const schema = z.object({
   // URL (e.g. https://room-match-web.up.railway.app) so a phone tap opens a real
   // page; if neither is set the button falls back to an in-chat message.
   WEB_BASE_URL: z.string().url().optional(),
-})
+}).refine(
+  // Production must never ship with a wildcard CORS origin. `*` + `credentials:
+  // true` + SameSite=None cookies lets any site make credentialed requests as
+  // the victim (full account takeover). Fail fast at boot instead of running
+  // wide-open. Set CORS_ORIGIN to the frontend origin in prod.
+  (d) => !(d.NODE_ENV === 'production' && d.CORS_ORIGIN === '*'),
+  { message: 'CORS_ORIGIN must be set to a specific origin in production (not "*")', path: ['CORS_ORIGIN'] },
+)
 
 const parsed = schema.safeParse(process.env)
 if (!parsed.success) {

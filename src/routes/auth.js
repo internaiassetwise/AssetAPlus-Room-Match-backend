@@ -273,7 +273,6 @@ auth.get('/line/callback', asyncHandler(async (req, res) => {
   if (!payload) {
     throw new AppError(400, 'AUTH_BAD_STATE', 'Line login state mismatch — please try again')
   }
-  const role     = payload.r === 'landlord' ? 'landlord' : 'tenant'
   const returnTo = sanitizeReturn(payload.rt || '/')
 
   // Exchange the auth code for an access token (confidential client: the channel
@@ -305,13 +304,14 @@ auth.get('/line/callback', asyncHandler(async (req, res) => {
   if (!lineUserId) throw new AppError(502, 'LINE_NO_USER', 'Line did not return a user id')
 
   // Link the Line identity to tenant and/or landlord rows. A user can be both,
-  // so we look in BOTH tables and set a session for every row that exists. The
-  // ?role= hint only seeds a stub when the user is brand-new.
+  // so we look in BOTH tables and set a session for every row that exists.
+  // Brand-new users are ALWAYS seeded as tenants — a public web login must never
+  // mint a landlord account (that's an admin/bot-only action). The ?role= hint
+  // only affects the post-login landing page, not which account is created.
   let tenant   = await tenants.findByLineId(lineUserId)
   let landlord = await landlords.findByLineId(lineUserId)
   if (!tenant && !landlord) {
-    if (role === 'landlord') landlord = await landlords.createFromBot(lineUserId)
-    else                     tenant   = await tenants.createFromBot(lineUserId)
+    tenant = await tenants.createFromBot(lineUserId)
   }
 
   // Capture the Line display name (+ picture) as the user's webapp name. Only

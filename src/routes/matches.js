@@ -5,8 +5,13 @@ import * as repo from '../db/repositories/matches.repo.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate } from '../middleware/validate.js'
 import { AppError } from '../middleware/AppError.js'
+import { requireAdmin } from '../middleware/requireAdmin.js'
 
 export const matches = Router()
+
+// Matching is an admin/internal operation — the responses carry tenant names +
+// phones, and POST/PATCH can forge match status (e.g. contract_signed).
+matches.use(requireAdmin)
 
 const listQuery = z.object({
   status:   z.enum(['suggested', 'contacted', 'viewing', 'contract_signed', 'rejected']).optional(),

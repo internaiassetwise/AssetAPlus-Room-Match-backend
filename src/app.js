@@ -16,6 +16,12 @@ import { errorHandler }  from './middleware/error.js'
 export function createApp() {
   const app = express()
 
+  // Railway terminates TLS in front of Node, so trust the first proxy hop —
+  // otherwise req.protocol is 'http' (stored image URLs come out as http://,
+  // which Line Flex rejects, and OIDC callback URLs use the wrong scheme) and
+  // req.ip is the proxy address (breaking any future IP-based rate limit).
+  app.set('trust proxy', 1)
+
   // Per-request id (for log correlation; surfaced in error JSON too)
   app.use((req, _res, next) => {
     req.id = req.headers['x-request-id'] || randomUUID()

@@ -209,7 +209,10 @@ myListings.post('/:id/photos', requireBot, photoUpload.single('photo'),
     await fs.writeFile(fullPath, req.file.buffer)
 
     // Public URL the Line bot will use as the image src in subsequent replies.
-    const publicUrl = `${req.protocol}://${req.get('host')}/uploads/rooms/${roomId}/${fileName}`
+    // Prefer the configured public origin (reliable behind a proxy); the
+    // req.protocol fallback is correct now that `trust proxy` is set.
+    const origin = (process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '')
+    const publicUrl = `${origin}/uploads/rooms/${roomId}/${fileName}`
 
     // Persist via a repo function (created on demand below).
     const roomImagesRepo = await import('../db/repositories/roomImages.repo.js')

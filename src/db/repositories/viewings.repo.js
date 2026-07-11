@@ -10,6 +10,7 @@ const SELECT_BASE = `
     v.id, v.room_id, v.tenant_id, v.tenant_line_user_id, v.scheduled_for,
     v.status, v.note, v.landlord_note,
     v.requested_at, v.created_at, v.updated_at,
+    r.landlord_id,
     r.title       AS room_title,
     r.monthly_rent AS room_rent,
     z.slug         AS zone_slug,

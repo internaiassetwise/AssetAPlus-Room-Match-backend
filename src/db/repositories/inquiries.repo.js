@@ -56,27 +56,40 @@ export async function findForTenant(tenantId) {
   return rows
 }
 
-/** Landlord replies — sets reply + status='replied' + replied_at. */
-export async function reply(id, replyText) {
+/** Landlord replies — sets reply + status='replied' + replied_at.
+ *  Scoped to the room's owner so a landlord can only reply to inquiries on
+ *  THEIR OWN rooms (not enumerate or act on other landlords' inquiries). */
+export async function reply(id, landlordId, replyText) {
   const { rows } = await query(
     `UPDATE inquiries
         SET reply      = $2,
             status     = 'replied',
             replied_at = NOW(),
             updated_at = NOW()
-      WHERE id = $1
-     RETURNING id`,
-    [id, replyText],
+      FROM rooms r
+     WHERE inquiries.id = $1
+       AND r.id = inquiries.room_id
+       AND r.landlord_id = $3
+     RETURNING inquiries.id`,
+    [id, replyText, landlordId],
   )
-  if (rows.rowCount === 0) return null
+  // rows is the RETURNING array — empty when the ownership filter matched
+  // nothing (caller doesn't own the room). (Don't use rows.rowCount — arrays
+  // don't have that property; that was the old bug letting non-owners through.)
+  if (rows.length === 0) return null
   return findById(id)
 }
 
-/** Landlord closes an inquiry. */
-export async function close(id) {
+/** Landlord closes an inquiry — scoped to the room's owner (see reply()). */
+export async function close(id, landlordId) {
   const res = await query(
-    `UPDATE inquiries SET status = 'closed', updated_at = NOW() WHERE id = $1`,
-    [id],
+    `UPDATE inquiries
+        SET status = 'closed', updated_at = NOW()
+      FROM rooms r
+     WHERE inquiries.id = $1
+       AND r.id = inquiries.room_id
+       AND r.landlord_id = $2`,
+    [id, landlordId],
   )
   return res.rowCount > 0
 }

@@ -279,7 +279,8 @@ liff.post('/listing/submit', photoUpload.array('photos', 10), asyncHandler(async
     for (const file of req.files) {
       const fileName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${extFromMimetype(file.mimetype)}`
       await fs.writeFile(path.join(dir, fileName), file.buffer)
-      const publicUrl = `${req.protocol}://${req.get('host')}/uploads/rooms/${room.id}/${fileName}`
+      const origin = (config.APP_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '')
+      const publicUrl = `${origin}/uploads/rooms/${room.id}/${fileName}`
       await roomImages.create(room.id, publicUrl, fileName)
     }
   }

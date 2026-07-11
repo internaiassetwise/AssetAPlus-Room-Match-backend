@@ -56,12 +56,12 @@ inquiries.get('/', asyncHandler(async (req, res) => {
 inquiries.patch('/:id', requireLandlord, validate({ params: idParam, body: patchBody }),
   asyncHandler(async (req, res) => {
     if (req.body.reply) {
-      const updated = await repo.reply(req.params.id, req.body.reply)
+      const updated = await repo.reply(req.params.id, req.landlord.id, req.body.reply)
       if (!updated) throw new AppError(404, 'INQUIRY_NOT_FOUND', 'ไม่พบข้อความนี้')
       return res.json(updated)
     }
     if (req.body.close) {
-      const ok = await repo.close(req.params.id)
+      const ok = await repo.close(req.params.id, req.landlord.id)
       if (!ok) throw new AppError(404, 'INQUIRY_NOT_FOUND', 'ไม่พบข้อความนี้')
       return res.status(204).end()
     }

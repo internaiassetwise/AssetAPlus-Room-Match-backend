@@ -148,6 +148,10 @@ viewings.patch('/:id', validate({ params: idParam, body: patchBody }),
 
     if (wantsLandlordAction) {
       await runMiddleware(requireLandlord, req, res)
+      // Ownership: a landlord may only act on viewings for THEIR OWN rooms.
+      if (item.landlord_id !== req.landlord.id) {
+        throw new AppError(403, 'NOT_OWNER', 'คุณไม่ใช่เจ้าของห้องนี้')
+      }
       // Tenant cancellation is not gated through here — landlord_note ignored.
       const updated = await repo.updateStatus(req.params.id, {
         status:       req.body.status,
