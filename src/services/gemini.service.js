@@ -289,7 +289,12 @@ export async function chatTurn({ contents, tools, toolConfig, generationConfig }
       temperature:     0.6,
       topK:            20,
       topP:            0.9,
-      maxOutputTokens: 2048,
+      maxOutputTokens: 8192,
+      // gemini-2.5-flash is a thinking model; left unchecked it can spend the
+      // whole output budget on internal reasoning and emit NO visible text or
+      // functionCall (showing up as an empty reply). Cap the thinking budget so
+      // there's always room for the actual reply / tool call.
+      thinkingConfig:  { thinkingBudget: 1024 },
       ...(generationConfig || {}),
     },
   }

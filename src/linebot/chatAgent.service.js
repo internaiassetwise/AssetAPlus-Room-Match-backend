@@ -156,6 +156,7 @@ async function runAgentLoop({ lineUserId, history }) {
   const ctx = { lineUserId, logger }
   let contents = buildContents(history)
   const pushes = []
+  let retriedEmpty = false
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const turn = await gemini.chatTurn({
@@ -171,9 +172,17 @@ async function runAgentLoop({ lineUserId, history }) {
 
     const fcs = Array.isArray(turn.functionCalls) ? turn.functionCalls : []
     if (fcs.length === 0) {
-      // Pure text turn → final reply. (Empty text falls through to the cap fallback.)
-      return { reply: turn.text && turn.text.trim() ? turn.text.trim() : null, pushes }
+      const text = turn.text && turn.text.trim() ? turn.text.trim() : null
+      if (text) return { reply: text, pushes }
+      // Empty turn — a thinking model occasionally emits no visible text or
+      // functionCall (e.g. when truncated by the output-token cap). Give it one
+      // more shot before giving up, so the user rarely sees "ระบบตอบกลับไม่ได้".
+      if (retriedEmpty) return { reply: null, pushes }
+      logger.warn({ lineUserId, round, finishReason: turn.finishReason, usage: turn.usage }, 'empty model turn — retrying once')
+      retriedEmpty = true
+      continue
     }
+    retriedEmpty = false // got a real (tool-calling) turn — reset the retry budget
 
     // Execute every functionCall this turn, then build the two turns to append:
     // a model turn echoing the calls (+thoughtSignature) and a user turn with
