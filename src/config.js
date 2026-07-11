@@ -57,6 +57,11 @@ const schema = z.object({
   LINE_LOGIN_CHANNEL_SECRET: z.string().optional(),
   LINE_LOGIN_REDIRECT_URI:   z.string().url().optional(),
 
+  // HMAC key for self-contained OAuth state tokens (see auth/stateToken.js).
+  // Optional — stateToken falls back to LINE_LOGIN_CHANNEL_SECRET. Set a
+  // dedicated value if you want state signing decoupled from the Line secret.
+  OAUTH_STATE_SECRET:        z.string().optional(),
+
   // Public base URL of THIS backend, used to build absolute URLs for room photos
   // the bot saves (room_images.url). Defaults to localhost:<PORT> for dev; set
   // APP_BASE_URL in prod to the reachable origin (e.g. https://room-match.up.railway.app).

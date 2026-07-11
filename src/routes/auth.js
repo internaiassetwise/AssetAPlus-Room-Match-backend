@@ -20,7 +20,6 @@
 
 import { Router } from 'express'
 import { z } from 'zod'
-import { randomUUID } from 'node:crypto'
 import * as oidc from 'openid-client'
 import * as admins           from '../db/repositories/admins.repo.js'
 import * as tenants          from '../db/repositories/tenants.repo.js'
@@ -32,6 +31,7 @@ import { validate }            from '../middleware/validate.js'
 import { AppError }            from '../middleware/AppError.js'
 import { requireAdmin, ADMIN_COOKIE, readCookie } from '../middleware/requireAdmin.js'
 import { googleClient, azureClient } from '../auth/oidc.js'
+import { signState, verifyState } from '../auth/stateToken.js'
 import {
   USER_COOKIE, LANDLORD_COOKIE,
   oidcCookieStore, sanitizeReturn, flushOidcCookies,
@@ -193,10 +193,16 @@ auth.get('/user/me', asyncHandler(async (req, res) => {
 // One LINE Login channel serves BOTH tenants and landlords (and the LIFF listing
 // form). Flow:
 //   GET /auth/line/start?role=tenant|landlord&return=/path
-//     → 302 to Line's consent screen (state + role + return in short-lived cookies)
+//     → 302 to Line's consent screen; `state` is a SIGNED token carrying
+//       role + return + issued-at (see auth/stateToken.js) — NOT a cookie.
 //   GET /auth/line/callback?code=&state=
-//     → exchange code → fetch Line profile → findByLineId in BOTH tables → set
-//       user_session and/or landlord_session (a user can hold both roles) → redirect.
+//     → verify the state token's HMAC → exchange code → fetch Line profile →
+//       findByLineId in BOTH tables → set user_session and/or landlord_session
+//       (a user can hold both roles) → redirect.
+//
+// State is carried in the URL, not a cookie, because iOS Safari's ITP drops the
+// SameSite=Lax state cookie set during the cross-site redirect chain — which
+// otherwise shows up as AUTH_BAD_STATE on iPhone only.
 //
 // The ?role= hint only decides which stub to seed for a BRAND-NEW user (no row in
 // either table). Returning users get a session for every role they already have,
@@ -231,7 +237,12 @@ auth.get('/line/start', asyncHandler(async (req, res) => {
   }
   const role     = req.query.role === 'landlord' ? 'landlord' : 'tenant'
   const returnTo = sanitizeReturn(req.query.return)
-  const state    = randomUUID()
+
+  // Carry role + return path + issued-at inside a SIGNED token passed as Line's
+  // `state`, which Line echoes back unchanged. HMAC verification in the callback
+  // proves the value is ours — no cookie round-trip, so this survives iOS
+  // Safari's ITP (which drops the SameSite=Lax state cookie set mid-redirect).
+  const state = signState({ r: role, rt: returnTo, iat: Date.now() })
 
   const authUrl = new URL(LINE_AUTHORIZE_URL)
   authUrl.searchParams.set('response_type', 'code')
@@ -245,35 +256,25 @@ auth.get('/line/start', asyncHandler(async (req, res) => {
   authUrl.searchParams.set('scope',         'profile openid')
   authUrl.searchParams.set('ui_locales',    'th')
 
-  oidcCookieStore.set(res, req)('oidc_state',     state)
-  oidcCookieStore.set(res, req)('oidc_role',      role)
-  oidcCookieStore.set(res, req)('oidc_return_to', returnTo)
-  flushOidcCookies(req, res)
   res.redirect(authUrl.href)
 }))
 
 auth.get('/line/callback', asyncHandler(async (req, res) => {
   if (!lineLoginConfigured()) throw new AppError(503, 'PROVIDER_NOT_CONFIGURED', 'Line Login is not configured yet')
 
-  // CSRF: the state Line echoed back must match the one we set at /start.
-  const expectedState = readCookie(req, 'oidc_state')
-  if (!expectedState || req.query.state !== expectedState) {
-    throw new AppError(400, 'AUTH_BAD_STATE', 'Line login state mismatch — please try again')
-  }
-  const role     = readCookie(req, 'oidc_role') === 'landlord' ? 'landlord' : 'tenant'
-  const returnTo = readCookie(req, 'oidc_return_to') || '/'
-
-  const clearOidc = () => {
-    res.clearCookie('oidc_state',     { path: '/' })
-    res.clearCookie('oidc_role',      { path: '/' })
-    res.clearCookie('oidc_return_to', { path: '/' })
-  }
-
   // User declined, or Line returned an error — bounce back to the login page.
   if (req.query.error) {
-    clearOidc()
     return res.redirect(frontendUrl('/login?line_error=1'))
   }
+
+  // Verify the signed state token Line echoed back (no cookie needed). A bad or
+  // stale signature = the request didn't originate from our /start.
+  const payload = verifyState(req.query.state)
+  if (!payload) {
+    throw new AppError(400, 'AUTH_BAD_STATE', 'Line login state mismatch — please try again')
+  }
+  const role     = payload.r === 'landlord' ? 'landlord' : 'tenant'
+  const returnTo = sanitizeReturn(payload.rt || '/')
 
   // Exchange the auth code for an access token (confidential client: the channel
   // secret stays server-side, so no PKCE needed).
@@ -323,7 +324,6 @@ auth.get('/line/callback', asyncHandler(async (req, res) => {
   }
 
   logger.info({ lineUserId, tenant: !!tenant, landlord: !!landlord }, 'line login succeeded')
-  clearOidc()
   res.redirect(frontendUrl(returnTo))
 }))
 
