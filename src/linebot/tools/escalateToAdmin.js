@@ -8,7 +8,6 @@
 // someone get back to you" reply.
 
 import { alertAdmins } from '../adminAlert.service.js'
-import * as chatSessions from '../../db/repositories/chatSessions.repo.js'
 
 export const name = 'escalateToAdmin'
 
@@ -116,17 +115,19 @@ export async function handler(args, ctx) {
     })
     // (alertAdmins also pushes to the admin Line group if configured)
 
-    // Live takeover: mute the bot for this user and link the new ticket, so the
-    // user's next messages go straight to the admin (via the inbox thread) and
-    // skip Gemini until the admin hands control back.
-    await chatSessions.beginTakeover(ctx.lineUserId, { ticketId: ticket?.id })
+    // NOTE: we intentionally do NOT start a live takeover here. This only
+    // queues a ticket + group ping for the admin. The bot stays in AI mode and
+    // keeps replying normally. A live takeover (muting the bot + opening the
+    // chat thread) happens ONLY when an admin explicitly clicks รับเรื่อง in the
+    // inbox — auto-muting before any admin has engaged left the user with no
+    // answer until someone clicked in, which is not the intended behaviour.
 
     log.info(
       { tool: name, lineUserId: ctx.lineUserId, reason, ticketId: ticket?.id },
-      'escalated to admin queue — live takeover started',
+      'escalated to admin queue (admin must รับเรื่อง manually)',
     )
 
-    return { escalated: true, reason, live: true }
+    return { escalated: true, reason }
   } catch (err) {
     // Unexpected DB failure — surface as a soft error so the model can relay a
     // polite Thai fallback instead of crashing the whole turn.
