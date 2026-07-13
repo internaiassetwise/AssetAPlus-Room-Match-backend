@@ -107,11 +107,12 @@ async function processEvent(ev, { handle, handleImage }) {
       await handleImage(lineUserId, ev?.message?.id, replyToken)
     } else if (eventType === 'postback') {
       if (await routeToLiveAgent(lineUserId, ev)) return
-      await handlePostback(lineUserId, ev?.postback?.data)
+      await handlePostback(lineUserId, ev?.postback?.data, replyToken)
     } else if (eventType === 'follow' && lineUserId) {
       // New friend added the bot — send a welcome + the quick-reply menu so
-      // desktop users (no Rich Menu) immediately see how to get started.
-      await push(lineUserId, { ...welcome(), quickReply: menuQuickReply() })
+      // desktop users (no Rich Menu) immediately see how to get started. Rides
+      // the FREE reply path (postback/follow events carry a reply token).
+      await lineMessaging.replyOrPush(lineUserId, replyToken, { ...welcome(), quickReply: menuQuickReply() })
     }
     // 'unfollow','leave', etc. → no-op (audit-logged above)
   } catch (err) {
@@ -165,7 +166,7 @@ async function routeToLiveAgent(lineUserId, ev) {
  * Deterministic postback dispatcher (no LLM). Data is a query string set by the
  * Flex button, e.g. `action=book&slotId=5`. Today only `book` is supported.
  */
-export async function handlePostback(lineUserId, dataStr) {
+export async function handlePostback(lineUserId, dataStr, replyToken = null) {
   if (!lineUserId) return
   const params = new URLSearchParams(typeof dataStr === 'string' ? dataStr : '')
   const action = params.get('action')
@@ -173,8 +174,8 @@ export async function handlePostback(lineUserId, dataStr) {
 
   if (action === 'book') {
     const slotId = Number(params.get('slotId'))
-    if (Number.isInteger(slotId)) await bookSlot(lineUserId, slotId)
-    else await push(lineUserId, 'ขออภัยค่ะ ไม่สามารถจองได้ (ข้อมูลไม่ถูกต้อง)')
+    if (Number.isInteger(slotId)) await bookSlot(lineUserId, slotId, replyToken)
+    else await lineMessaging.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ ไม่สามารถจองได้ (ข้อมูลไม่ถูกต้อง)')
   }
   // Unknown actions are no-ops (logged above).
 }
@@ -182,14 +183,15 @@ export async function handlePostback(lineUserId, dataStr) {
 /**
  * Book a viewing slot on behalf of the Line user: validate the slot is still
  * open + future, upsert the tenant, create a 'requested' viewing, atomically
- * mark the slot booked, and push a confirmation. All best-effort — a failure
- * pushes a polite message and the webhook still returns 200.
+ * mark the slot booked, and send a confirmation. The confirmation rides the
+ * FREE reply path (postback events carry a reply token). The admin-group alert
+ * is a metered push (no token) — it's admin-side awareness. All best-effort.
  */
-async function bookSlot(lineUserId, slotId) {
+async function bookSlot(lineUserId, slotId, replyToken = null) {
   const slot = await viewingSlots.findById(slotId)
   const now = Date.now()
   if (!slot || slot.status !== 'open' || new Date(slot.startsAt).getTime() < now) {
-    await push(lineUserId, 'ขออภัยค่ะ เวลาที่เลือกไม่สามารถจองได้แล้ว รบกวนเลือกช่วงอื่นนะคะ')
+    await lineMessaging.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ เวลาที่เลือกไม่สามารถจองได้แล้ว รบกวนเลือกช่วงอื่นนะคะ')
     return
   }
 
@@ -204,19 +206,19 @@ async function bookSlot(lineUserId, slotId) {
     note:             null,
   })
   if (!viewing) {
-    await push(lineUserId, 'ขออภัยค่ะ จองไม่สำเร็จ กรุณาลองอีกครั้งนะคะ')
+    await lineMessaging.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ จองไม่สำเร็จ กรุณาลองอีกครั้งนะคะ')
     return
   }
 
   // Atomically claim the slot; if two users raced, the loser's viewing is voided.
   const booked = await viewingSlots.markBooked(slot.id, viewing.id)
   if (!booked) {
-    await push(lineUserId, 'ขออภัยค่ะ เวลานี้ถูกจองไปแล้ว รบกวนเลือกช่วงอื่นนะคะ')
+    await lineMessaging.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ เวลานี้ถูกจองไปแล้ว รบกวนเลือกช่วงอื่นนะคะ')
     return
   }
 
   const room = await findRoomById(slot.roomId)
-  await push(lineUserId, viewingConfirmation({
+  await lineMessaging.replyOrPush(lineUserId, replyToken, viewingConfirmation({
     roomTitle:    room?.title,
     scheduledFor: bangkokDisplay(slot.startsAt),
     viewingId:    viewing.id,

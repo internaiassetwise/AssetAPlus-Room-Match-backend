@@ -147,6 +147,39 @@ export async function replyMessage(replyToken, messages) {
 }
 
 /**
+ * Best-effort delivery that prefers a FREE replyMessage (uses the webhook reply
+ * token — NOT counted against the monthly push quota) and falls back to a
+ * metered pushMessage only when there's no token or the reply failed (e.g.
+ * token expired). Swallows errors so a delivery failure never throws — the bot
+ * must stay alive even when the push quota is exhausted.
+ *
+ * Use this everywhere a webhook event triggers an outbound user message, so the
+ * message rides the free reply path instead of burning push quota.
+ */
+export async function replyOrPush(lineUserId, replyToken, messages) {
+  const msgs = (Array.isArray(messages) ? messages : [messages])
+    .map((m) => (typeof m === 'string' ? { type: 'text', text: m } : m))
+    .filter(Boolean)
+  if (msgs.length === 0) return
+  if (!isConfigured()) return
+  if (replyToken) {
+    try {
+      await replyMessage(replyToken, msgs.slice(0, 5))
+      for (const m of msgs.slice(5)) {
+        try { await pushMessage(lineUserId, m) } catch (err) { logger.error({ err, lineUserId }, 'line push failed (overflow)') }
+      }
+      return
+    } catch (err) {
+      logger.warn({ err: err.message, lineUserId }, 'replyMessage failed, falling back to push')
+    }
+  }
+  for (const m of msgs) {
+    try { await pushMessage(lineUserId, m) }
+    catch (err) { logger.error({ err, lineUserId }, 'line push failed') }
+  }
+}
+
+/**
  * Fetch a user's profile (displayName, pictureUrl, statusMessage, language).
  * Used to personalise greetings and to record who a landlord is. Cached in
  * memory per-process for 5 minutes — Line's profile data is slow-moving.

@@ -114,12 +114,12 @@ export async function handle(lineUserId, text, replyToken = null) {
     r = await runOnce(lineUserId, text)
   } catch (err) {
     logger.error({ err, lineUserId }, 'chat agent handle failed')
-    await deliver(lineUserId, replyToken, 'ขออภัยค่ะ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งค่ะ')
+    await line.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งค่ะ')
     return null
   }
 
   if (r.status === 'not_configured') {
-    await deliver(lineUserId, replyToken, 'ขออภัยค่ะ ระบบยังไม่ได้ตั้งค่า AI กรุณาลองใหม่ภายหลัง')
+    await line.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ ระบบยังไม่ได้ตั้งค่า AI กรุณาลองใหม่ภายหลัง')
     return null
   }
   if (!r.reply) {
@@ -128,7 +128,7 @@ export async function handle(lineUserId, text, replyToken = null) {
     // couldn't produce a text reply. Deliver those FIRST so the user sees the
     // action succeeded and doesn't blindly retry (which would duplicate the
     // draft/viewing). Only prompt a retry when nothing was actually done.
-    await deliver(lineUserId, replyToken, [
+    await line.replyOrPush(lineUserId, replyToken, [
       ...r.pushes,
       r.pushes.length
         ? 'เสร็จเรียบร้อยค่ะ แต่น้องห้องตอบข้อความไม่ได้ชั่วคราว หากมีปัญหาแจ้งได้นะคะ'
@@ -274,10 +274,10 @@ function buildContents(history) {
  *
  * @param {string} lineUserId
  * @param {string} messageId  Line message id (used to fetch the bytes)
- * @param {string} [_replyToken]
+ * @param {string} [replyToken]  Used to send confirmations as a FREE reply.
  * @returns {Promise<{roomId:number}|null>}
  */
-export async function handleImage(lineUserId, messageId, _replyToken = null) {
+export async function handleImage(lineUserId, messageId, replyToken = null) {
   if (!lineUserId || !messageId) return null
   try {
     const draft = await roomsRepo.findPendingByLineUser(lineUserId)
@@ -288,7 +288,7 @@ export async function handleImage(lineUserId, messageId, _replyToken = null) {
         summary: 'ได้รับรูปภาพจากผู้ใช้ แต่ยังไม่มีประกาศห้องที่รออนุมัติ',
         originalPayload: { messageId },
       })
-      await safePush(lineUserId,
+      await line.replyOrPush(lineUserId, replyToken,
         'ยังไม่มีประกาศห้องที่รออนุมัติในระบบค่ะ ส่งรูปนี้ให้แอดมินดูแล้ว หากต้องการปล่อยห้อง พิมพ์บอกรายละเอียดห้องก่อนได้เลยนะคะ')
       return null
     }
@@ -304,12 +304,12 @@ export async function handleImage(lineUserId, messageId, _replyToken = null) {
     const publicUrl = `${base}/uploads/rooms/${draft.id}/${fileName}`
     await roomImages.create(draft.id, publicUrl, fileName)
 
-    await safePush(lineUserId, `ได้รับรูปภาพสำหรับห้อง "${draft.title}" เรียบร้อยค่ะ 📸`)
+    await line.replyOrPush(lineUserId, replyToken, `ได้รับรูปภาพสำหรับห้อง "${draft.title}" เรียบร้อยค่ะ 📸`)
     logger.info({ lineUserId, roomId: draft.id }, 'attached room photo via Line')
     return { roomId: draft.id }
   } catch (err) {
     logger.error({ err, lineUserId }, 'chat agent handleImage failed')
-    await safePush(lineUserId, 'ขออภัยค่ะ รับรูปภาพไม่สำเร็จ รบกวนลองส่งใหม่อีกครั้งนะคะ')
+    await line.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ รับรูปภาพไม่สำเร็จ รบกวนลองส่งใหม่อีกครั้งนะคะ')
     return null
   }
 }
@@ -323,41 +323,6 @@ function extFromNameType(filename, contentType) {
   return '.jpg'
 }
 
-/**
- * Push helper — swallows Line-side errors so one bad push never crashes the
- * webhook path. Accepts a single Line message object or a plain string.
- */
-async function safePush(lineUserId, message) {
-  try {
-    if (!line.isConfigured()) return
-    const msg = typeof message === 'string' ? { type: 'text', text: message } : message
-    await line.pushMessage(lineUserId, msg)
-  } catch (err) {
-    logger.error({ err, lineUserId }, 'line push failed')
-  }
-}
-
-/**
- * Deliver messages preferring a FREE replyMessage (uses the webhook reply
- * token — unlimited, NOT counted against the monthly push quota) and falling
- * back to pushMessage (quota-metered) when there's no token or the reply
- * failed (e.g. token expired). LINE caps one reply at 5 messages; any extras
- * are pushed. This is what keeps the bot working after the free-plan push
- * quota is exhausted — the agent turn finishes in a few seconds, well inside
- * the reply token's validity window.
- */
-async function deliver(lineUserId, replyToken, messages) {
-  const norm = (m) => (typeof m === 'string' ? { type: 'text', text: m } : m)
-  const msgs = (Array.isArray(messages) ? messages : [messages]).map(norm).filter(Boolean)
-  if (msgs.length === 0) return
-  if (replyToken && line.isConfigured()) {
-    try {
-      await line.replyMessage(replyToken, msgs.slice(0, 5))
-      for (const m of msgs.slice(5)) await safePush(lineUserId, m)
-      return
-    } catch (err) {
-      logger.warn({ err: err.message, lineUserId }, 'replyMessage failed, falling back to push')
-    }
-  }
-  for (const m of msgs) await safePush(lineUserId, m)
-}
+// Outbound delivery is centralised in lineMessaging.replyOrPush() (prefers a
+// FREE replyMessage using the webhook reply token, falls back to metered
+// push). See handle() / handleImage() call sites.
