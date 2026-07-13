@@ -107,7 +107,7 @@ export async function runOnce(lineUserId, text) {
  * @param {string} text
  * @param {string} [replyToken]  From the inbound webhook. Used to send the reply
  *   as a FREE replyMessage (LINE's free quota) instead of a metered pushMessage
- *   — see deliver().
+ *   — see lineMessaging.replyOrPush().
  * @returns {Promise<{reply:string}|null>}
  */
 export async function handle(lineUserId, text, replyToken = null) {
@@ -147,7 +147,7 @@ export async function handle(lineUserId, text, replyToken = null) {
     ? zoneQuickReply(await zonesRepo.findAll())
     : menuQuickReply()
   // Reply text first, then any tool cards — bundled into one free reply.
-  await deliver(lineUserId, replyToken, [
+  await line.replyOrPush(lineUserId, replyToken, [
     { type: 'text', text: r.reply, quickReply },
     ...r.pushes,
   ])
