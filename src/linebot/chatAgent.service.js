@@ -103,21 +103,23 @@ export async function runOnce(lineUserId, text) {
  *
  * @param {string} lineUserId
  * @param {string} text
- * @param {string} [replyToken]  Unused in Phase 4 (we always push) — kept for API stability.
+ * @param {string} [replyToken]  From the inbound webhook. Used to send the reply
+ *   as a FREE replyMessage (LINE's free quota) instead of a metered pushMessage
+ *   — see deliver().
  * @returns {Promise<{reply:string}|null>}
  */
-export async function handle(lineUserId, text, _replyToken = null) {
+export async function handle(lineUserId, text, replyToken = null) {
   let r
   try {
     r = await runOnce(lineUserId, text)
   } catch (err) {
     logger.error({ err, lineUserId }, 'chat agent handle failed')
-    await safePush(lineUserId, 'ขออภัยค่ะ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งค่ะ')
+    await deliver(lineUserId, replyToken, 'ขออภัยค่ะ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งค่ะ')
     return null
   }
 
   if (r.status === 'not_configured') {
-    await safePush(lineUserId, 'ขออภัยค่ะ ระบบยังไม่ได้ตั้งค่า AI กรุณาลองใหม่ภายหลัง')
+    await deliver(lineUserId, replyToken, 'ขออภัยค่ะ ระบบยังไม่ได้ตั้งค่า AI กรุณาลองใหม่ภายหลัง')
     return null
   }
   if (!r.reply) {
@@ -126,10 +128,12 @@ export async function handle(lineUserId, text, _replyToken = null) {
     // couldn't produce a text reply. Deliver those FIRST so the user sees the
     // action succeeded and doesn't blindly retry (which would duplicate the
     // draft/viewing). Only prompt a retry when nothing was actually done.
-    for (const msg of r.pushes) await safePush(lineUserId, msg)
-    await safePush(lineUserId, r.pushes.length
-      ? 'เสร็จเรียบร้อยค่ะ แต่น้องห้องตอบข้อความไม่ได้ชั่วคราว หากมีปัญหาแจ้งได้นะคะ'
-      : 'ขออภัยค่ะ ระบบตอบกลับไม่ได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง')
+    await deliver(lineUserId, replyToken, [
+      ...r.pushes,
+      r.pushes.length
+        ? 'เสร็จเรียบร้อยค่ะ แต่น้องห้องตอบข้อความไม่ได้ชั่วคราว หากมีปัญหาแจ้งได้นะคะ'
+        : 'ขออภัยค่ะ ระบบตอบกลับไม่ได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง',
+    ])
     return null
   }
 
@@ -140,8 +144,11 @@ export async function handle(lineUserId, text, _replyToken = null) {
   const quickReply = wantsViewing
     ? zoneQuickReply(await zonesRepo.findAll())
     : menuQuickReply()
-  await safePush(lineUserId, { type: 'text', text: r.reply, quickReply })
-  for (const msg of r.pushes) await safePush(lineUserId, msg)
+  // Reply text first, then any tool cards — bundled into one free reply.
+  await deliver(lineUserId, replyToken, [
+    { type: 'text', text: r.reply, quickReply },
+    ...r.pushes,
+  ])
 
   logger.info(
     { lineUserId, outLen: r.reply.length, pushes: r.pushes.length },
@@ -328,4 +335,29 @@ async function safePush(lineUserId, message) {
   } catch (err) {
     logger.error({ err, lineUserId }, 'line push failed')
   }
+}
+
+/**
+ * Deliver messages preferring a FREE replyMessage (uses the webhook reply
+ * token — unlimited, NOT counted against the monthly push quota) and falling
+ * back to pushMessage (quota-metered) when there's no token or the reply
+ * failed (e.g. token expired). LINE caps one reply at 5 messages; any extras
+ * are pushed. This is what keeps the bot working after the free-plan push
+ * quota is exhausted — the agent turn finishes in a few seconds, well inside
+ * the reply token's validity window.
+ */
+async function deliver(lineUserId, replyToken, messages) {
+  const norm = (m) => (typeof m === 'string' ? { type: 'text', text: m } : m)
+  const msgs = (Array.isArray(messages) ? messages : [messages]).map(norm).filter(Boolean)
+  if (msgs.length === 0) return
+  if (replyToken && line.isConfigured()) {
+    try {
+      await line.replyMessage(replyToken, msgs.slice(0, 5))
+      for (const m of msgs.slice(5)) await safePush(lineUserId, m)
+      return
+    } catch (err) {
+      logger.warn({ err: err.message, lineUserId }, 'replyMessage failed, falling back to push')
+    }
+  }
+  for (const m of msgs) await safePush(lineUserId, m)
 }
