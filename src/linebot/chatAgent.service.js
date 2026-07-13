@@ -98,10 +98,35 @@ export async function runOnce(lineUserId, text) {
   line.startLoading?.(lineUserId, 20).catch(() => {})
 
   const { history } = await store.append(lineUserId, 'user', trimmed)
-  const { reply, pushes } = await runAgentLoop({ lineUserId, history })
+  const { reply: rawReply, pushes } = await runAgentLoop({ lineUserId, history })
+  // Sanitise BEFORE storing + returning: Line renders plain text, so markdown
+  // (**bold**, *italic*, # heading, `code`, list markers) shows literally.
+  // Strip it deterministically — the model keeps slipping `**` back in despite
+  // the prompt rule. Also keeps history clean so the model stops seeing its own
+  // markdown on later turns.
+  const reply = rawReply ? stripMarkdown(rawReply) : rawReply
   if (reply) await store.append(lineUserId, 'assistant', reply)
   else logger.warn({ lineUserId, inLen: trimmed.length }, 'agent loop returned no reply')
   return { reply, pushes, status: reply ? 'ok' : 'no_reply' }
+}
+
+/**
+ * Strip markdown that Line would render as literal characters (Line is plain
+ * text). Order matters: remove ** before *, etc. Conservative — room copy
+ * rarely contains literal *, _, #, or backticks.
+ */
+function stripMarkdown(text) {
+  if (typeof text !== 'string') return text
+  return text
+    .replace(/```[\s\S]*?```/g, (m) => m.replace(/```/g, ''))
+    .replace(/`([^`\n]+)`/g, '$1')        // inline code
+    .replace(/\*\*([^*]+)\*\*/g, '$1')     // **bold**
+    .replace(/__([^_]+)__/g, '$1')         // __bold__
+    .replace(/(?<!\w)\*([^*\n]+)\*(?!\w)/g, '$1')   // *italic*
+    .replace(/(?<!\w)_([^_\n]+)_(?!\w)/g, '$1')     // _italic_
+    .replace(/^#{1,6}\s+/gm, '')           // headings
+    .replace(/^(\s*)[-*+]\s+/gm, '$1• ')   // -, *, + list markers → •
+    .replace(/\s{3,}/g, '  ')              // collapse long runs of spaces
 }
 
 /**
