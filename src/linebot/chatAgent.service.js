@@ -64,14 +64,16 @@ const SYSTEM_PROMPT = [
   '- escalateToAdmin: กรณีที่น้องห้องช่วยไม่ได้ (เรื่องในขอบเขตที่ต้องให้คนดำเนินการ เช่น เรื่องพิเศษ/ร้องเรียน) หรือ getFaqAnswer บอก found=false — ส่งต่อให้แอดมิน (ห้ามใช้กับคำถามนอกขอบเขต ให้ปฏิเสธตามกฎข้อ 2)',
   '',
   'หลังเรียก tool แล้ว ใช้ผลลัพธ์ตอบผู้ใช้เป็นภาษาเดียวกับผู้ใช้สั้นๆ ห้ามเผยรายละเอียดเชิงเทคนิค (เช่น คะแนน similarity, โครงสร้าง JSON) ให้ผู้ใช้โดยไม่จำเป็น',
-  '   ✦ ห้ามพิมพ์ ID/หมายเลขห้องในคำตอบเด็ดขาด — ห้ามมี "(ID: 4)", "ID 4", "ห้อง #4", "ห้องหมายเลข 4" หรือเลข roomId ใดๆ ในรายการ/คำอธิบายห้อง (ผู้ใช้กดการ์ด Flex ด้านล่างได้เลย ไม่ต้องบอกเลข); ในข้อความแสดงเฉพาะชื่อห้อง ย่าน จำนวนห้องนอน/น้ำ ขนาด และราคา',
+  '   ✦ ห้ามพิมพ์ ID/หมายเลขห้องในคำตอบเด็ดขาด — ห้ามมี "(ID: 4)", "ID 4", "ห้อง #4", "ห้องหมายเลข 4" หรือเลข roomId ใดๆ; รายละเอียดห้องอยู่ในการ์ด Flex ไม่ต้องเอาเลขมาบอก',
+  '6. [การ์ดแสดงรายละเอียดให้] ยังต้องเรียก tool เสมอ (searchRooms / scheduleViewing / createRoomDraft) เพื่อให้การ์ดปรากฏ — แต่เมื่อ tool ส่งการ์ด/carousel ไปแล้ว ห้ามพิมพ์รายการห้องหรือรายละเอียดซ้ำในข้อความ ให้พิมพ์แค่ประโยคนำสั้นๆ บรรทัดเดียวแล้วจบ เช่น "มีห้องว่างให้เลือก 5 ห้องค่ะ กดดูรายละเอียดได้เลยนะคะ 👇" ผู้ใช้จะเห็นการ์ดขึ้นเองด้านล่าง (ห้ามข้ามการเรียก tool — ถ้าไม่เรียก การ์ดจะไม่ขึ้น ผู้ใช้จะเห็นแค่ข้อความ)',
   '',
-  'REMINDER — ทบทวนกฎ 5 ข้อที่ห้ามลืม:',
+  'REMINDER — ทบทวนกฎ 6 ข้อที่ห้ามลืม:',
   ' • ภาษา: ถ้าผู้ใช้พิมพ์ภาษาอังกฤษ คุณต้องตอบเป็นภาษาอังกฤษเท่านั้น (even if the room/FAQ data is in Thai).',
   ' • ขอบเขต: คำถามนอกขอบเขต (ไม่เกี่ยวกับห้องเช่า) ต้องปฏิเสธเป็นมิตรแล้วชวนกลับ ห้ามตอบและห้ามส่งต่อแอดมิน',
   ' • ห้ามลาก่อน/ขอตัว: พร้อมช่วยเสมอ — ผู้ใช้บอกว่าไม่มีอะไรแล้ว/บาย ให้ตอบว่ายินดีช่วยเสมอ ห้ามขอตัว/ลา',
   ' • ห้าม markdown/ XML: Line เป็น plain text — ห้าม *, **, _, #, ` และห้าม * นำหน้าบรรทัด; ใช้ • สำหรับรายการห้อง',
   ' • ห้ามพิมพ์โครงสร้างการ์ด/URL เอง: การ์ดและลิงก์ฟอร์มระบบส่งให้อัตโนมัติจาก tool — น้องห้องพิมพ์แค่ประโยคไทยสั้นๆ นำทาง (ห้าม <LINE_FLEX_CARD...> หรือ tag/URL ใดๆ ในคำตอบ)',
+  ' • การ์ดแสดงรายละเอียดให้แล้ว: เมื่อ tool ส่งการ์ด/carousel ห้ามพิมพ์รายการห้องซ้ำในข้อความ — พิมพ์แค่ประโยคนำบรรทัดเดียว',
 ].join('\n')
 
 /**
@@ -108,6 +110,26 @@ export async function runOnce(lineUserId, text) {
   if (reply) await store.append(lineUserId, 'assistant', reply)
   else logger.warn({ lineUserId, inLen: trimmed.length }, 'agent loop returned no reply')
   return { reply, pushes, status: reply ? 'ok' : 'no_reply' }
+}
+
+/**
+ * Conservative "show me available rooms" intent detector — used ONLY to force
+ * the searchRooms tool on round 0 so the room carousel always appears. Narrow
+ * by design: only obvious room-browsing phrasing. Booking a viewing, listing,
+ * editing, uploading photos, or referencing a specific room id are NOT matched
+ * (those have other tools / the model decides). False negatives are fine — the
+ * model still calls searchRooms most of the time; this just plugs the gap where
+ * it skips.
+ */
+function wantsRoomSearch(text) {
+  const t = String(text || '').toLowerCase().trim()
+  if (!t) return false
+  // Belongs to another tool/flow → don't force searchRooms.
+  if (/นัดชม|เข้าชม|จอง|ลงประกาศ|ปล่อยห้อง|ลงห้อง|แก้รายละเอียด|แก้ห้อง|อัปโหลดรูป|ส่งรูป|list.{0,12}room|post.{0,12}room|edit/.test(t)) return false
+  // A specific room reference → getRoomDetails, not a browse.
+  if (/ดูห้อง\s*#?\s*\d|ห้อง\s*#?\s*\d|room\s*#?\s*\d/.test(t)) return false
+  // Obvious room-browsing intent (Thai + English), incl. filtered ("ห้องอ่อนนุก").
+  return /ดูห้อง|ห้องว่าง|หาห้อง|มีห้อง|เช่าห้อง|ห้องเช่า|แนะนำห้อง|เลือกห้อง|ห้องใกล้|ห้องย่าน|ห้อง.+ย่าน|show.{0,20}room|available.{0,20}room|find.{0,20}room|search.{0,20}room|browse.{0,20}room/.test(t)
 }
 
 /**
@@ -201,12 +223,20 @@ async function runAgentLoop({ lineUserId, history }) {
   let contents = buildContents(history)
   const pushes = []
   let retriedEmpty = false
+  const lastUserText = history.length ? history[history.length - 1].content : ''
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    // Round 0: if the user is clearly asking to browse rooms, FORCE searchRooms
+    // so the carousel always appears. The model otherwise sometimes skips the
+    // tool (now that it only writes a one-line intro) and the user would see a
+    // text intro with no rooms. Later rounds stay AUTO.
+    const forceSearch = (round === 0 && wantsRoomSearch(lastUserText))
     const turn = await gemini.chatTurn({
       contents,
       tools: tools.DECLARATIONS,
-      toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+      toolConfig: forceSearch
+        ? { functionCallingConfig: { mode: 'ANY', allowedFunctionNames: ['searchRooms'] } }
+        : { functionCallingConfig: { mode: 'AUTO' } },
     })
 
     if (!turn.ok) {
