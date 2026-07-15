@@ -239,3 +239,20 @@ CREATE TABLE IF NOT EXISTS inquiries (
 );
 CREATE INDEX IF NOT EXISTS idx_inquiries_room   ON inquiries(room_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_inquiries_tenant ON inquiries(tenant_id, created_at);
+
+-- ---------- TENANT LEADS (anonymous "ฉันอยากเช่า" form submissions) ----------
+-- Capped to int / text — no FK to tenants since visitor may not be a registered
+-- user. Admin surfaces rows in /admin/leads (or reads raw via psql for now).
+CREATE TABLE IF NOT EXISTS tenant_leads (
+  id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  zone            TEXT,
+  monthly_budget  INTEGER,
+  property_type   TEXT,
+  move_in         TEXT,
+  full_name       TEXT NOT NULL,
+  phone           TEXT NOT NULL,
+  source_page     TEXT,
+  status          TEXT NOT NULL DEFAULT 'new',          -- new | contacted | closed
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_leads_status ON tenant_leads(status, created_at);
