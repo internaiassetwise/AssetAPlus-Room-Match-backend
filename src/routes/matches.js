@@ -58,5 +58,11 @@ matches.patch('/:id', validate({
 }), asyncHandler(async (req, res) => {
   const updated = await repo.updateStatus(req.params.id, req.body.status, req.body.agentNote)
   if (!updated) throw new AppError(404, 'MATCH_NOT_FOUND', 'ไม่พบรายการ match นี้')
+  // Side-effect: keep `rooms.matched_at` in sync so the landing-page stat
+  // ('ที่ Match แล้ว') stays accurate without a join. Best-effort — if it
+  // fails the match update still wins, the next status flip will retry.
+  if (req.body.status === 'contract_signed') {
+    try { await repo.markRoomMatched(updated.id) } catch { /* swallow */ }
+  }
   res.json({ ok: true, id: updated.id })
 }))

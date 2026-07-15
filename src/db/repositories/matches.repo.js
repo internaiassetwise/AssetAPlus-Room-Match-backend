@@ -63,6 +63,37 @@ export async function updateStatus(id, status, agentNote = null) {
 }
 
 /**
+ * Stamp the room's denormalised `matched_at` whenever a match reaches the
+ * signed-lifecycle terminal state. Source of truth stays in `matches`; this
+ * just keeps the landing-page stat query (`COUNT(*) FROM rooms WHERE
+ * matched_at IS NOT NULL`) cheap and accurate.
+ *
+ * Idempotent — uses COALESCE-equivalent semantics so a re-transition (e.g.
+ * admin toggles contact_signed → contract_signed twice) keeps the earliest
+ * timestamp, never overwrites a real signed moment, and is a no-op when the
+ * destination status isn't `contract_signed`.
+ *
+ * Returns the room id that was stamped (or null).
+ */
+export async function markRoomMatched(matchId) {
+  const { rows } = await query(
+    `WITH src AS (
+       SELECT m.id, m.room_id, m.updated_at
+         FROM matches m
+        WHERE m.id = $1 AND m.status = 'contract_signed'
+     )
+     UPDATE rooms r
+        SET matched_at = src.updated_at
+       FROM src
+      WHERE r.id = src.room_id
+        AND r.matched_at IS NULL
+     RETURNING r.id`,
+    [matchId],
+  )
+  return rows[0]?.id ?? null
+}
+
+/**
  * Score every available room for a tenant against their preferences,
  * insert suggestions with match_score, and return the top N.
  *
