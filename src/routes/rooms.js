@@ -1,9 +1,11 @@
 // src/routes/rooms.js — Listing + detail for rooms + admin approval + viewing slots.
 import { Router } from 'express'
 import { z } from 'zod'
+import multer from 'multer'
 import * as repo from '../db/repositories/rooms.repo.js'
 import * as slotsRepo from '../db/repositories/viewingSlots.repo.js'
 import * as roomImages from '../db/repositories/roomImages.repo.js'
+import { detectImageExt } from '../services/fileSignature.service.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate } from '../middleware/validate.js'
 import { AppError } from '../middleware/AppError.js'
@@ -12,6 +14,20 @@ import { logger } from '../logger.js'
 import * as lineMessaging from '../linebot/lineMessaging.service.js'
 
 export const rooms = Router()
+
+// multer in-memory so the handler can inspect bytes + decide its own path.
+// Mirrors the bot photo upload in my-listings.js; bytes are validated with
+// detectImageExt before being written to disk.
+const photoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB cap
+  fileFilter: (_req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) {
+      return cb(new AppError(400, 'BAD_MIME', 'ต้องเป็นไฟล์รูปภาพ'))
+    }
+    cb(null, true)
+  },
+})
 
 const listQuery = z.object({
   zone:    z.string().optional(),
@@ -116,6 +132,80 @@ rooms.delete('/:id', requireAdmin, validate({ params: idParam }), asyncHandler(a
   if (!ok) throw new AppError(404, 'ROOM_NOT_FOUND', 'ไม่พบห้องนี้')
   res.status(204).end()
 }))
+
+/**
+ * GET /:id/photos — admin photo list with IDs (for the room form's photo
+ * manager). The public GET /:id already returns photos as plain URL strings,
+ * but the admin form needs IDs to delete individual photos.
+ */
+rooms.get('/:id/photos', requireAdmin, validate({ params: idParam }),
+  asyncHandler(async (req, res) => {
+    res.json(await roomImages.findByRoom(req.params.id))
+  }),
+)
+
+/**
+ * POST /:id/photos — admin photo upload from the room form.
+ *
+ * Multipart/form-data with a single `photo` field. Validates bytes via
+ * detectImageExt (rejects anything that isn't jpg/png/webp/gif), writes to
+ * uploads/rooms/{id}/, inserts a room_images row, returns the public URL.
+ *
+ * Authentication: requireAdmin. The admin room form calls this after the room
+ * has been created (create mode) or anytime (edit mode).
+ */
+rooms.post('/:id/photos', requireAdmin, validate({ params: idParam }), photoUpload.single('photo'),
+  asyncHandler(async (req, res) => {
+    const roomId = Number(req.params.id)
+    const room = await repo.findById(roomId)
+    if (!room) throw new AppError(404, 'ROOM_NOT_FOUND', 'ไม่พบห้องนี้')
+
+    if (!req.file) {
+      throw new AppError(400, 'NO_FILE', 'กรุณาส่งไฟล์รูปภาพ (field: photo)')
+    }
+
+    // Derive the extension from ACTUAL bytes — filename + Content-Type are
+    // client-controlled. Rejects non-images to prevent stored XSS via
+    // uploaded .html/.svg served from the API origin.
+    const ext = detectImageExt(req.file.buffer)
+    if (!ext) {
+      throw new AppError(400, 'BAD_IMAGE', 'ไฟล์ไม่ใช่รูปภาพที่รองรับ (รองรับ jpg/png/webp/gif)')
+    }
+
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+    const crypto = await import('node:crypto')
+
+    const fileName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`
+    const dir = path.join(process.cwd(), 'uploads', 'rooms', String(roomId))
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, fileName), req.file.buffer)
+
+    // Prefer the configured public origin (reliable behind a proxy); the
+    // req.protocol fallback is correct now that `trust proxy` is set.
+    const origin = (process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '')
+    const publicUrl = `${origin}/uploads/rooms/${roomId}/${fileName}`
+
+    const row = await roomImages.create(roomId, publicUrl, fileName)
+    return res.status(201).json({ url: publicUrl, id: row.id })
+  }),
+)
+
+/**
+ * DELETE /:id/photos/:photoId — admin removes a single photo.
+ *
+ * Removes the room_images row. The file on disk is left behind (cheap to
+ * orphan, risky to delete — but the DB row is the source of truth for the
+ * gallery, so it disappears from the UI immediately).
+ */
+rooms.delete('/:id/photos/:photoId', requireAdmin,
+  validate({ params: z.object({ id: z.coerce.number().int().positive(), photoId: z.coerce.number().int().positive() }) }),
+  asyncHandler(async (req, res) => {
+    const ok = await roomImages.removeOne(req.params.photoId, req.params.id)
+    if (!ok) throw new AppError(404, 'PHOTO_NOT_FOUND', 'ไม่พบรูปภาพนี้')
+    res.status(204).end()
+  }),
+)
 
 // ----- Admin approval actions (Phase 5) ------------------------------------
 

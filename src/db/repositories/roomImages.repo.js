@@ -42,6 +42,18 @@ export async function removeByRoom(roomId) {
   await query('DELETE FROM room_images WHERE room_id = $1', [roomId])
 }
 
+/**
+ * Delete a single image row, scoped to the given room. Returns true if a row
+ * was deleted, false if not found (or belongs to a different room).
+ */
+export async function removeOne(photoId, roomId) {
+  const { rowCount } = await query(
+    'DELETE FROM room_images WHERE id = $1 AND room_id = $2',
+    [photoId, roomId],
+  )
+  return rowCount > 0
+}
+
 function rowToImage(row) {
   return {
     id:        row.id,

@@ -30,3 +30,24 @@ export async function createTenantLead(input) {
   )
   return rows[0].id
 }
+
+/**
+ * Fetch every tenant lead (newest first) for the Excel export. Cap is high
+ * (5,000) as a safety net — the table is append-only and a typical Room Match
+ * deployment sees far fewer rows than that.
+ *
+ * @param {object} [opts]
+ * @param {number} [opts.limit=5000]
+ * @returns {Promise<Array>} raw rows with snake_case columns
+ */
+export async function listAll({ limit = 5000 } = {}) {
+  const { rows } = await query(
+    `SELECT id, zone, monthly_budget, property_type, move_in,
+            full_name, phone, source_page, status, created_at
+       FROM tenant_leads
+       ORDER BY created_at DESC
+       LIMIT $1`,
+    [Math.min(limit, 5000)],
+  )
+  return rows
+}
