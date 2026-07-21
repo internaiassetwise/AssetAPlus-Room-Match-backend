@@ -82,10 +82,15 @@ export function flushOidcCookies(req, res) {
     for (const { key, value } of req.__oidcCookies) {
       res.cookie(key, value, {
         httpOnly: true,
-        sameSite: 'lax',         // OIDC redirect flow — same browser session
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: 10 * 60 * 1000,  // 10 min — enough to complete the round-trip
-        path: '/',
+        // SameSite=None is REQUIRED for OIDC state/PKCE cookies: the
+        // Microsoft/Google → backend redirect is a cross-site navigation,
+        // and Lax cookies are dropped on intermediate hops in the chain
+        // (especially Safari ITP + Chrome's scheme-based site boundaries).
+        // None + Secure survives the full redirect back to us.
+        sameSite: 'none',
+        secure:   true,
+        maxAge:   10 * 60 * 1000,  // 10 min — enough to complete the round-trip
+        path:     '/',
       })
     }
   }
