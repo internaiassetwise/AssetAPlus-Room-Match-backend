@@ -105,7 +105,19 @@ function renderListingHtml(liffId, submitUrl) {
       <input id="title" name="title" type="text" required placeholder="เช่น คอนโด ใกล้ BTS" />
 
       <label for="zone">ย่าน</label>
-      <input id="zone" name="zone" type="text" required placeholder="เช่น อ่อนนุก" />
+      <select id="zone" name="zone" required>
+        <option value="">— เลือกย่าน —</option>
+        <option value="ลาดพร้าว">ลาดพร้าว</option>
+        <option value="รัชดา-ห้วยขวาง">รัชดา-ห้วยขวาง</option>
+        <option value="อ่อนนุช">อ่อนนุช</option>
+        <option value="เกษตร">เกษตร</option>
+        <option value="แจ้งวัฒนะ">แจ้งวัฒนะ</option>
+        <option value="ศาลายา">ศาลายา</option>
+        <option value="ศรีสมาน">ศรีสมาน</option>
+        <option value="นครปฐม">นครปฐม</option>
+        <option value="อื่นๆ">อื่นๆ</option>
+      </select>
+      <input id="zoneOther" type="text" placeholder="ระบุย่านของคุณ" style="display:none; margin-top:8px;" />
 
       <label for="propertyType">ประเภท</label>
       <select id="propertyType" name="propertyType">
@@ -186,11 +198,29 @@ function renderListingHtml(liffId, submitUrl) {
       });
     })();
 
+    // Show the free-text input when "อื่นๆ" is selected, hide otherwise.
+    var zoneSelect = document.getElementById('zone');
+    var zoneOther  = document.getElementById('zoneOther');
+    zoneSelect.addEventListener('change', function () {
+      zoneOther.style.display = this.value === 'อื่นๆ' ? 'block' : 'none';
+      if (this.value !== 'อื่นๆ') zoneOther.value = '';
+    });
+
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       setLoading(true);
       statusEl.className = 'status';
       var fd = new FormData(form);
+      // When the user picks "อื่นๆ", swap in the free-text value they typed.
+      if (fd.get('zone') === 'อื่นๆ') {
+        var other = document.getElementById('zoneOther').value.trim();
+        if (!other) {
+          showStatus('กรุณาระบุย่านของคุณ', true);
+          setLoading(false);
+          return;
+        }
+        fd.set('zone', other);
+      }
       // Send the LIFF access token so the server verifies our identity — the
       // hidden lineUserId field is no longer trusted on its own.
       var token = (typeof liff !== 'undefined' && liff.getAccessToken) ? liff.getAccessToken() : '';
