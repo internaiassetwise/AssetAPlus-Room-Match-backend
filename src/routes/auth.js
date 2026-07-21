@@ -427,10 +427,24 @@ auth.get('/azure/callback', asyncHandler(async (req, res) => {
       pkceCodeVerifier: savedVerifier,
     })
   } catch (err) {
-    logger.error({ err, currentUrl: currentUrl.href, redirectUri: process.env.AZURE_REDIRECT_URI },
-      'Azure token exchange failed')
+    // openid-client wraps Azure's token-endpoint error in a ResponseBodyError
+    // with { error, error_description, status, body }. Extract the real cause
+    // so the user sees WHY Azure rejected it (invalid_client, invalid_grant,
+    // redirect_uri mismatch, expired secret, etc.) instead of a generic message.
+    const azureError   = err?.error || err?.code || 'UNKNOWN'
+    const azureDetail  = err?.error_description || err?.message || ''
+    const azureStatus  = err?.status || '?'
+    logger.error({
+      err,
+      azureError,
+      azureDetail,
+      azureStatus,
+      currentUrl: currentUrl.href,
+      expectedRedirectUri: process.env.AZURE_REDIRECT_URI,
+      derivedRedirectUri:  `${currentUrl.origin}${currentUrl.pathname}`,
+    }, 'Azure token exchange failed')
     throw new AppError(502, 'AZURE_TOKEN_FAILED',
-      `Token exchange failed: ${err.message}`)
+      `Azure rejected (${azureStatus} ${azureError}): ${azureDetail}`)
   }
 
   const claims = tokens.claims()
