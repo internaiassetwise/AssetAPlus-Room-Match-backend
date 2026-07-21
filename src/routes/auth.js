@@ -348,23 +348,37 @@ auth.get('/line/callback', asyncHandler(async (req, res) => {
 // returned `email` claim here.
 
 auth.get('/azure/start', asyncHandler(async (req, res) => {
-  const client = await azureClient()
+  const redirectUri = process.env.AZURE_REDIRECT_URI
+  if (!redirectUri) {
+    throw new AppError(503, 'PROVIDER_NOT_CONFIGURED',
+      'AZURE_REDIRECT_URI is not set. Add it in Railway Variables.')
+  }
+
+  let client
+  try {
+    client = await azureClient()
+  } catch (err) {
+    logger.error({ err, tenantId: process.env.AZURE_TENANT_ID }, 'Azure discovery failed')
+    throw new AppError(503, 'AZURE_DISCOVERY_FAILED',
+      `Cannot reach Azure AD: ${err.message}. Check AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET.`)
+  }
   if (!client) {
     return res.status(503).json({
       ok: false,
-      error: { code: 'PROVIDER_NOT_CONFIGURED', message: 'Microsoft sign-in is not configured yet' },
+      error: { code: 'PROVIDER_NOT_CONFIGURED', message: 'Set AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET on Railway.' },
     })
   }
+
   const returnTo = sanitizeReturn(req.query.return)
   const state = oidc.randomState()
   const codeVerifier = oidc.randomPKCECodeVerifier()
   const codeChallenge = await oidc.calculatePKCECodeChallenge(codeVerifier)
   const authUrl = oidc.buildAuthorizationUrl(client, {
-    redirect_uri:           process.env.AZURE_REDIRECT_URI,
-    scope:                  'openid profile email',
+    redirect_uri:          redirectUri,
+    scope:                 'openid profile email',
     state,
-    code_challenge:         codeChallenge,
-    code_challenge_method:  'S256',
+    code_challenge:        codeChallenge,
+    code_challenge_method: 'S256',
   })
   oidcCookieStore.set(res, req)('oidc_state', state)
   oidcCookieStore.set(res, req)('oidc_code_verifier', codeVerifier)
@@ -374,17 +388,52 @@ auth.get('/azure/start', asyncHandler(async (req, res) => {
 }))
 
 auth.get('/azure/callback', asyncHandler(async (req, res) => {
-  const client = await azureClient()
+  let client
+  try {
+    client = await azureClient()
+  } catch (err) {
+    throw new AppError(503, 'AZURE_DISCOVERY_FAILED', `Azure discovery: ${err.message}`)
+  }
   if (!client) throw new AppError(503, 'PROVIDER_NOT_CONFIGURED', 'Microsoft sign-in is not configured yet')
 
+  // Azure redirects with ?code=...&state=... on success, or ?error=... on failure.
+  if (req.query.error) {
+    throw new AppError(400, 'AZURE_AUTH_DENIED',
+      `Azure denied: ${req.query.error} — ${req.query.error_description || ''}`)
+  }
+
   const currentUrl = new URL(req.originalUrl, `${req.protocol}://${req.headers.host}`)
-  const tokens = await oidc.authorizationCodeGrant(client, currentUrl, {
-    expectedState:    readCookie(req, 'oidc_state'),
-    pkceCodeVerifier: readCookie(req, 'oidc_code_verifier'),
-  })
+
+  // Check whether the OIDC state cookie survived the Microsoft → backend
+  // redirect. If it's missing, the cookie was dropped (SameSite / ITP).
+  const savedState = readCookie(req, 'oidc_state')
+  const savedVerifier = readCookie(req, 'oidc_code_verifier')
+  if (!savedState || !savedVerifier) {
+    logger.error({
+      hasState: !!savedState,
+      hasVerifier: !!savedVerifier,
+      cookieHeader: req.headers.cookie?.slice(0, 200),
+      protocol: req.protocol,
+      host: req.headers.host,
+    }, 'Azure callback: OIDC state/PKCE cookies missing')
+    throw new AppError(400, 'OIDC_COOKIE_LOST',
+      'State/PKCE cookie was lost during Microsoft redirect. Check SameSite/Secure settings.')
+  }
+
+  let tokens
+  try {
+    tokens = await oidc.authorizationCodeGrant(client, currentUrl, {
+      expectedState:    savedState,
+      pkceCodeVerifier: savedVerifier,
+    })
+  } catch (err) {
+    logger.error({ err, currentUrl: currentUrl.href, redirectUri: process.env.AZURE_REDIRECT_URI },
+      'Azure token exchange failed')
+    throw new AppError(502, 'AZURE_TOKEN_FAILED',
+      `Token exchange failed: ${err.message}`)
+  }
+
   const claims = tokens.claims()
-  // Azure's stable per-user id is the 'oid' claim. Falls back to 'sub' in
-  // single-tenant flows but 'oid' is what Azure documentation recommends.
   const oid  = claims.oid || claims.sub
   const admin = await admins.upsertFromAzure({
     oid,
