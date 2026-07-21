@@ -256,3 +256,24 @@ CREATE TABLE IF NOT EXISTS tenant_leads (
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_tenant_leads_status ON tenant_leads(status, created_at);
+
+-- ── Admin action audit trail (014) ──────────────────────────────────────────
+-- Append-only log of every admin write (POST/PATCH/DELETE). Keyed by azure_oid
+-- so actions are attributable even if the admin row is later renamed.
+CREATE TABLE IF NOT EXISTS admin_action_log (
+  id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  admin_id      INTEGER REFERENCES admins(id) ON DELETE SET NULL,
+  azure_oid     TEXT,
+  display_name  TEXT,
+  method        TEXT NOT NULL,
+  path          TEXT NOT NULL,
+  action        TEXT,
+  entity_type   TEXT,
+  entity_id     TEXT,
+  status_code   INTEGER,
+  metadata      JSONB DEFAULT '{}',
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_admin_action_log_admin  ON admin_action_log(admin_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_action_log_entity ON admin_action_log(entity_type, entity_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_action_log_time   ON admin_action_log(created_at DESC);

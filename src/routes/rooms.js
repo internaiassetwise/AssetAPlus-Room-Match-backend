@@ -211,19 +211,24 @@ rooms.delete('/:id/photos/:photoId', requireAdmin,
 
 rooms.post('/:id/approve', requireAdmin, validate({ params: idParam }),
   asyncHandler(async (req, res) => {
-    const approver = `admin:${req.admin?.username ?? 'unknown'}`
-    const room = await repo.approve(req.params.id, approver)
+    const approver = req.admin?.displayName || req.admin?.username || 'unknown'
+    const approverTag = `@${approver}`
+    const room = await repo.approve(req.params.id, `admin:${approver}`)
     if (!room) throw new AppError(404, 'ROOM_NOT_FOUND', 'ไม่พบห้องที่รออนุมัติ')
-    pushToLandlord(room, `🎉 ประกาศ "${room.title}" อนุมัติแล้วค่ะ ตอนนี้ขึ้นบนเว็บแล้ว ผู้เช่าจะเห็นและนัดชมได้เลยค่ะ`)
+    pushToLandlord(room, `🎉 ประกาศ "${room.title}" อนุมัติแล้วค่ะ ตอนนี้ขึ้นบนเว็บแล้ว ผู้เช่าจะเห็นและนัดชมได้เลยค่ะ\n— อนุมัติโดย ${approverTag}`)
+    notifyAdminGroup(`✅ [อนุมัติประกาศ]\n"${room.title}"\nอนุมัติโดย: ${approverTag}`)
     res.json(room)
   }),
 )
 
 rooms.post('/:id/reject', requireAdmin, validate({ params: idParam }),
   asyncHandler(async (req, res) => {
+    const rejecter = req.admin?.displayName || req.admin?.username || 'unknown'
+    const rejecterTag = `@${rejecter}`
     const room = await repo.reject(req.params.id)
     if (!room) throw new AppError(404, 'ROOM_NOT_FOUND', 'ไม่พบห้องที่รออนุมัติ')
-    pushToLandlord(room, `ประกาศ "${room.title}" ยังไม่ผ่านการอนุมัตินะคะ รบกวนแชทกลับแอดมินเพื่อแก้ไขรายละเอียดเพิ่มเติมค่ะ`)
+    pushToLandlord(room, `ประกาศ "${room.title}" ยังไม่ผ่านการอนุมัตินะคะ รบกวนแชทกลับแอดมินเพื่อแก้ไขรายละเอียดเพิ่มเติมค่ะ\n— ปฏิเสธโดย ${rejecterTag}`)
+    notifyAdminGroup(`❌ [ปฏิเสธประกาศ]\n"${room.title}"\nปฏิเสธโดย: ${rejecterTag}`)
     res.json(room)
   }),
 )

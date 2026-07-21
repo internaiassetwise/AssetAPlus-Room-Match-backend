@@ -22,8 +22,13 @@ import { adminViewings }  from './adminViewings.js'
 import { leads }          from './leads.js'
 import lineWebhook        from '../linebot/lineWebhook.route.js'
 import { lineDebug }      from '../linebot/lineDebug.route.js'
+import { auditAdmin }     from '../middleware/auditAdmin.js'
 
 export const apiRouter = Router()
+
+// Audit every admin write (POST/PATCH/DELETE). Self-filters: skips requests
+// where req.admin isn't set (requireAdmin hasn't run or the route is public).
+apiRouter.use(auditAdmin)
 
 // Versioned
 apiRouter.use('/v1/health',         health)

@@ -26,6 +26,7 @@ import { AppError }     from '../middleware/AppError.js'
 import { requireAdmin } from '../middleware/requireAdmin.js'
 import { logger } from '../logger.js'
 import * as lineMessaging from '../linebot/lineMessaging.service.js'
+import { notifyAdminGroup } from '../linebot/adminAlert.service.js'
 
 export const adminViewings = Router()
 
@@ -78,8 +79,10 @@ adminViewings.post('/:id/confirm', requireAdmin, validate({ params: idParam }),
   asyncHandler(async (req, res) => {
     const v = await viewings.updateStatus(req.params.id, { status: 'confirmed' })
     if (!v) throw new AppError(404, 'VIEWING_NOT_FOUND', 'ไม่พบคำขอนัดชมนี้')
+    const adminTag = `@${req.admin?.displayName || req.admin?.username || 'แอดมิน'}`
     pushToTenant(v, `✅ ยืนยันนัดชมห้อง "${v.room_title}" แล้วค่ะ เจอกัน ${bangkok(v.scheduled_for)} นะคะ`)
-    logger.info({ viewingId: v.id, admin: req.admin?.username }, 'viewing confirmed by admin')
+    notifyAdminGroup(`✅ [ยืนยันนัดชม]\n"${v.room_title}" — ${bangkok(v.scheduled_for)}\nยืนยันโดย: ${adminTag}`)
+    logger.info({ viewingId: v.id, admin: req.admin?.displayName || req.admin?.username }, 'viewing confirmed by admin')
     res.json(mapRow(v))
   }),
 )
@@ -87,11 +90,13 @@ adminViewings.post('/:id/confirm', requireAdmin, validate({ params: idParam }),
 adminViewings.post('/:id/decline', requireAdmin, validate({ params: idParam }),
   asyncHandler(async (req, res) => {
     const v = await viewings.updateStatus(req.params.id, { status: 'declined' })
-    if (!v) throw new AppError(404, 'VIEWING_NOT_FOUND', 'ไม่พบคำขอนัดชมนี้')
+    if (!v) throw new AppError(404, 'VIEWING_NOT_FOUND', 'ไม่พบคำขอนัดชมนี้้')
+    const adminTag = `@${req.admin?.displayName || req.admin?.username || 'แอดมิน'}`
     // Free the slot so another tenant can book it; safe no-op if already gone.
     await viewingSlots.reopenByViewing(req.params.id)
     pushToTenant(v, `ขออภัยค่ะ คุณแอดมินต้องเลื่อนนัดชมห้อง "${v.room_title}" รบกวนเลือกเวลาใหม่ได้เลยนะคะ 🙏`)
-    logger.info({ viewingId: v.id, admin: req.admin?.username }, 'viewing declined by admin')
+    notifyAdminGroup(`❌ [เลื่อนนัดชม]\n"${v.room_title}" — ${bangkok(v.scheduled_for)}\nเลื่อนโดย: ${adminTag}`)
+    logger.info({ viewingId: v.id, admin: req.admin?.displayName || req.admin?.username }, 'viewing declined by admin')
     res.json(mapRow(v))
   }),
 )

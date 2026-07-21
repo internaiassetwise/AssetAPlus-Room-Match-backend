@@ -59,7 +59,8 @@ export async function createSession(adminId, ttlDays = 7) {
 /** Returns the admin row (without password_hash) if the token is valid + not expired. */
 export async function findSession(token) {
   const { rows } = await pool.query(
-    `SELECT a.id, a.username, a.is_active, s.expires_at
+    `SELECT a.id, a.username, a.display_name, a.email, a.azure_oid,
+            a.is_active, s.expires_at
        FROM admin_sessions s
        JOIN admins a ON a.id = s.admin_id
       WHERE s.token = $1 AND s.expires_at > NOW() AND a.is_active = TRUE`,

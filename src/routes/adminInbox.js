@@ -100,7 +100,7 @@ adminInbox.post('/:id/reply', requireAdmin,
     if (live) {
       // First admin to engage claims the chat → record who answered and announce
       // once in the group (so the team can see who picked it up).
-      const admin = req.admin?.username || null
+      const admin = req.admin?.displayName || req.admin?.username || null
       if (admin && !hs.takenOverBy) {
         await chatSessions.claim(item.lineUserId, admin)
         notifyAdminGroup(`🙋 @${admin} รับเรื่อง "${item.summary || ''}" แล้ว`)
@@ -132,7 +132,7 @@ adminInbox.post('/:id/takeover', requireAdmin, validate({ params: idParam }),
     const item = await repo.findById(req.params.id)
     if (!item) throw new AppError(404, 'INQUIRY_NOT_FOUND', 'ไม่พบรายการนี้')
 
-    const admin = req.admin?.username || req.admin?.id || null
+    const admin = req.admin?.displayName || req.admin?.username || req.admin?.id || null
     await repo.reopen(item.id)
     await chatSessions.beginTakeover(item.lineUserId, { ticketId: item.id, adminId: admin })
     await pushToUser(item.lineUserId, NOTICE_TAKEOVER)

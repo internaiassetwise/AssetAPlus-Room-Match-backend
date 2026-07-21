@@ -23,7 +23,16 @@ export async function requireAdmin(req, _res, next) {
     if (!token) throw new AppError(401, 'AUTH_REQUIRED', 'ต้องเข้าสู่ระบบก่อน')
     const session = await findSession(token)
     if (!session) throw new AppError(401, 'AUTH_INVALID', 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่')
-    req.admin = { id: session.id, username: session.username }
+    // Carry the full identity so every handler + the audit middleware can
+    // attribute the action to a specific Microsoft/Azure admin (azure_oid)
+    // or a local-login admin (username).
+    req.admin = {
+      id:          session.id,
+      username:    session.username,
+      displayName: session.display_name || session.username,
+      email:       session.email || null,
+      azureOid:    session.azure_oid || null,
+    }
     next()
   } catch (err) {
     next(err)
