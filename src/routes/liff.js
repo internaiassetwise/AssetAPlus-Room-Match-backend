@@ -101,6 +101,12 @@ function renderListingHtml(liffId, submitUrl) {
     <form id="listingForm" class="card">
       <input type="hidden" id="lineUserId" name="lineUserId" value="" />
 
+      <label for="contactName">ชื่อเจ้าของห้อง <span class="opt">*</span></label>
+      <input id="contactName" name="contactName" type="text" required placeholder="เช่น คุณสมชัย" />
+
+      <label for="contactPhone">เบอร์โทร <span class="opt">*</span></label>
+      <input id="contactPhone" name="contactPhone" type="tel" required placeholder="เช่น 081-234-5678" />
+
       <label for="title">ชื่อห้อง</label>
       <input id="title" name="title" type="text" required placeholder="เช่น คอนโด ใกล้ BTS" />
 
@@ -272,6 +278,18 @@ liff.post('/listing/submit',
   let landlord = await landlords.findByLineId(lineUserId)
   if (!landlord) landlord = await landlords.createFromBot(lineUserId)
 
+  // Save the landlord's contact name + phone from the form so admin can reach
+  // them outside Line (call/SMS). Updates every submission so the info stays
+  // current — the landlord might use a different number next time.
+  const contactName  = String(req.body.contactName || '').trim()
+  const contactPhone = String(req.body.contactPhone || '').trim()
+  if (contactName || contactPhone) {
+    await landlords.update(landlord.id, {
+      ...(contactName  ? { fullName: contactName }  : {}),
+      ...(contactPhone ? { phone:    contactPhone } : {}),
+    })
+  }
+
   // Resolve the free-text zone to a numeric id.
   const zone = await findByName(req.body.zone)
   if (!zone) throw new AppError(400, 'ZONE_NOT_FOUND', 'ไม่รู้จักย่าน')
@@ -326,7 +344,7 @@ liff.post('/listing/submit',
     }
   }
 
-  notifyAdminGroup(`🏠 [ประกาศใหม่รออนุมัติ]\n"${title}"\n— อนุมัติ/ปฏิเสธได้ที่ /admin/pending-listings`)
+  notifyAdminGroup(`🏠 [ประกาศใหม่รออนุมัติ]\n"${title}"\nเจ้าของห้อง: ${contactName || '—'} · โทร ${contactPhone || '—'}\n— อนุมัติ/ปฏิเสธได้ที่ /admin/pending-listings`)
 
   return res.status(201).json({ ok: true, roomId: room.id })
 }))
