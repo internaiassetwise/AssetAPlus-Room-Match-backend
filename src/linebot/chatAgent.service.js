@@ -167,7 +167,7 @@ function stripMarkdown(text) {
  * @returns {Promise<{reply:string}|null>}
  */
 export async function handle(lineUserId, text, replyToken = null) {
-  // Race the reply token against the LLM call. If Gemini is slow (>20s),
+  // Race the reply token against the LLM call. If Gemini is slow (>3s),
   // raceReplyToken fires a brief ack that consumes the token (marking the
   // user's message as read) before it expires at ~30s. finish() then returns
   // null so the real answer goes via push instead of a dead reply token.
