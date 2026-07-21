@@ -118,7 +118,7 @@ auth.get('/me', requireAdmin, asyncHandler(async (req, res) => {
 //     → exchange code, upsert tenant, set user_session cookie, redirect to ?return
 
 auth.get('/google/start', asyncHandler(async (req, res) => {
-  const client = googleClient()
+  const client = await googleClient()
   if (!client) {
     return res.status(503).json({
       ok: false,
@@ -145,7 +145,7 @@ auth.get('/google/start', asyncHandler(async (req, res) => {
 }))
 
 auth.get('/google/callback', asyncHandler(async (req, res) => {
-  const client = googleClient()
+  const client = await googleClient()
   if (!client) throw new AppError(503, 'PROVIDER_NOT_CONFIGURED', 'Google sign-in is not configured yet')
 
   const currentUrl = new URL(req.originalUrl, `${req.protocol}://${req.headers.host}`)
@@ -348,7 +348,7 @@ auth.get('/line/callback', asyncHandler(async (req, res) => {
 // returned `email` claim here.
 
 auth.get('/azure/start', asyncHandler(async (req, res) => {
-  const client = azureClient()
+  const client = await azureClient()
   if (!client) {
     return res.status(503).json({
       ok: false,
@@ -374,7 +374,7 @@ auth.get('/azure/start', asyncHandler(async (req, res) => {
 }))
 
 auth.get('/azure/callback', asyncHandler(async (req, res) => {
-  const client = azureClient()
+  const client = await azureClient()
   if (!client) throw new AppError(503, 'PROVIDER_NOT_CONFIGURED', 'Microsoft sign-in is not configured yet')
 
   const currentUrl = new URL(req.originalUrl, `${req.protocol}://${req.headers.host}`)
