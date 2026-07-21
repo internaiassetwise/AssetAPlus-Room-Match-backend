@@ -1,6 +1,22 @@
 // src/db/repositories/tenants.repo.js — Tenant (renter) CRUD + Google identity upsert.
 import { pool } from '../pool.js'
 
+/**
+ * List all tenants for the admin matching panel. Newest first.
+ * Returns id, name, phone, email, line_id, source — enough context for an
+ * admin to identify and match a tenant to a room.
+ */
+export async function findAll({ limit = 500 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT id, full_name, phone, email, line_id, source, created_at
+       FROM tenants
+      ORDER BY created_at DESC
+      LIMIT $1`,
+    [Math.min(limit, 1000)],
+  )
+  return rows
+}
+
 /** Look up a tenant by their stable Google 'sub' id. Returns null if absent. */
 export async function findByGoogleSub(sub) {
   const { rows } = await pool.query(
