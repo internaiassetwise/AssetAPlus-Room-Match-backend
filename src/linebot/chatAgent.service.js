@@ -16,8 +16,12 @@
 // We send: [model: functionCall+thoughtSignature][user: functionResponse+thoughtSignature]
 // and loop. When a turn has no functionCall (just text), that text is the reply.
 //
-// Push vs reply: replyTokens expire in ~30s and the LLM round-trip exceeds that,
-// so we always push. The replyToken arg is kept for design consistency.
+// Push vs reply: replyTokens expire in ~30s and the LLM round-trip can exceed
+// that. To keep the read-marker working, handle()/handleImage() race the LLM
+// call against a deadline — if the model is slow, we consume the reply token
+// with a brief ack BEFORE it expires (marking the user's message as read), then
+// deliver the real answer via pushMessage. replyOrPush still prefers a free
+// replyMessage whenever the token is alive at response time.
 
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
@@ -163,17 +167,27 @@ function stripMarkdown(text) {
  * @returns {Promise<{reply:string}|null>}
  */
 export async function handle(lineUserId, text, replyToken = null) {
+  // Race the reply token against the LLM call. If Gemini is slow (>20s),
+  // raceReplyToken fires a brief ack that consumes the token (marking the
+  // user's message as read) before it expires at ~30s. finish() then returns
+  // null so the real answer goes via push instead of a dead reply token.
+  const racer = line.raceReplyToken(lineUserId, replyToken)
+
+  // Typing indicator — non-blocking, best-effort. Shows "..." in the user's
+  // chat for up to 25s while the LLM is thinking.
+  line.startLoading(lineUserId, 25).catch(() => {})
+
   let r
   try {
     r = await runOnce(lineUserId, text)
   } catch (err) {
     logger.error({ err, lineUserId }, 'chat agent handle failed')
-    await line.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งค่ะ')
+    await line.replyOrPush(lineUserId, racer.finish(), 'ขออภัยค่ะ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งค่ะ')
     return null
   }
 
   if (r.status === 'not_configured') {
-    await line.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ ระบบยังไม่ได้ตั้งค่า AI กรุณาลองใหม่ภายหลัง')
+    await line.replyOrPush(lineUserId, racer.finish(), 'ขออภัยค่ะ ระบบยังไม่ได้ตั้งค่า AI กรุณาลองใหม่ภายหลัง')
     return null
   }
   if (!r.reply) {
@@ -182,7 +196,7 @@ export async function handle(lineUserId, text, replyToken = null) {
     // couldn't produce a text reply. Deliver those FIRST so the user sees the
     // action succeeded and doesn't blindly retry (which would duplicate the
     // draft/viewing). Only prompt a retry when nothing was actually done.
-    await line.replyOrPush(lineUserId, replyToken, [
+    await line.replyOrPush(lineUserId, racer.finish(), [
       ...r.pushes,
       r.pushes.length
         ? 'เสร็จเรียบร้อยค่ะ แต่น้องห้องตอบข้อความไม่ได้ชั่วคราว หากมีปัญหาแจ้งได้นะคะ'
@@ -198,8 +212,9 @@ export async function handle(lineUserId, text, replyToken = null) {
   const quickReply = wantsViewing
     ? zoneQuickReply(await zonesRepo.findAll())
     : menuQuickReply()
-  // Reply text first, then any tool cards — bundled into one free reply.
-  await line.replyOrPush(lineUserId, replyToken, [
+  // Reply text first, then any tool cards — bundled into one free reply
+  // (or push, if the early ack already consumed the token).
+  await line.replyOrPush(lineUserId, racer.finish(), [
     { type: 'text', text: r.reply, quickReply },
     ...r.pushes,
   ])
@@ -341,6 +356,11 @@ function buildContents(history) {
  */
 export async function handleImage(lineUserId, messageId, replyToken = null) {
   if (!lineUserId || !messageId) return null
+  // Image handling is usually fast (no LLM), but the token racer keeps the
+  // read marker working if the image download is slow.
+  const racer = line.raceReplyToken(lineUserId, replyToken, {
+    ackMessage: 'น้องห้องกำลังรับรูปภาพ รอสักครู่...',
+  })
   try {
     const draft = await roomsRepo.findPendingByLineUser(lineUserId)
     if (!draft) {
@@ -350,7 +370,7 @@ export async function handleImage(lineUserId, messageId, replyToken = null) {
         summary: 'ได้รับรูปภาพจากผู้ใช้ แต่ยังไม่มีประกาศห้องที่รออนุมัติ',
         originalPayload: { messageId },
       })
-      await line.replyOrPush(lineUserId, replyToken,
+      await line.replyOrPush(lineUserId, racer.finish(),
         'ยังไม่มีประกาศห้องที่รออนุมัติในระบบค่ะ ส่งรูปนี้ให้แอดมินดูแล้ว หากต้องการปล่อยห้อง พิมพ์บอกรายละเอียดห้องก่อนได้เลยนะคะ')
       return null
     }
@@ -366,12 +386,12 @@ export async function handleImage(lineUserId, messageId, replyToken = null) {
     const publicUrl = `${base}/uploads/rooms/${draft.id}/${fileName}`
     await roomImages.create(draft.id, publicUrl, fileName)
 
-    await line.replyOrPush(lineUserId, replyToken, `ได้รับรูปภาพสำหรับห้อง "${draft.title}" เรียบร้อยค่ะ 📸`)
+    await line.replyOrPush(lineUserId, racer.finish(), `ได้รับรูปภาพสำหรับห้อง "${draft.title}" เรียบร้อยค่ะ 📸`)
     logger.info({ lineUserId, roomId: draft.id }, 'attached room photo via Line')
     return { roomId: draft.id }
   } catch (err) {
     logger.error({ err, lineUserId }, 'chat agent handleImage failed')
-    await line.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ รับรูปภาพไม่สำเร็จ รบกวนลองส่งใหม่อีกครั้งนะคะ')
+    await line.replyOrPush(lineUserId, racer.finish(), 'ขออภัยค่ะ รับรูปภาพไม่สำเร็จ รบกวนลองส่งใหม่อีกครั้งนะคะ')
     return null
   }
 }

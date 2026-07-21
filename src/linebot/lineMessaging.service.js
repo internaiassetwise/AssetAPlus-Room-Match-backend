@@ -259,3 +259,63 @@ export async function startLoading(lineUserId, seconds = 20) {
 }
 
 export { isConfigured }
+
+/**
+ * Race a reply token against a slow producer (typically the Gemini LLM call).
+ *
+ * Line's reply tokens expire ~30s after the webhook fires. When the LLM takes
+ * longer than that, replyMessage rejects and replyOrPush falls back to a
+ * metered pushMessage — which does NOT mark the user's message as read on
+ * their phone (the #1 support complaint).
+ *
+ * This helper consumes the reply token with a brief ack BEFORE it expires
+ * (marking the message as read), then hands back null when the real response
+ * is ready so the caller knows to push instead of reply.
+ *
+ * Usage:
+ *   const racer = raceReplyToken(lineUserId, replyToken, { ackMessage: '…' })
+ *   const result = await slowLLMCall()
+ *   const token  = racer.finish()          // null if the ack already fired
+ *   await replyOrPush(lineUserId, token, result)
+ *
+ * @param {string} lineUserId
+ * @param {string|null} replyToken   null → racer is a no-op (finish always returns null)
+ * @param {object} [opts]
+ * @param {number} [opts.deadlineMs=20000]  When to fire the ack (leaves 10s headroom before expiry)
+ * @param {string} [opts.ackMessage]        The brief message shown while the bot is "thinking"
+ * @returns {{ finish: () => (string|null) }}  finish() returns the live token, or null if consumed
+ */
+export function raceReplyToken(lineUserId, replyToken, { deadlineMs = 20_000, ackMessage = 'น้องห้องกำลังหาข้อมูลให้ค่ะ รอสักครู่...' } = {}) {
+  if (!replyToken) {
+    return { finish: () => null }
+  }
+
+  let consumed = false
+
+  const timer = setTimeout(async () => {
+    if (consumed) return
+    try {
+      await replyMessage(replyToken, [{ type: 'text', text: ackMessage }])
+      consumed = true
+      logger.info({ lineUserId }, 'early ack sent — reply token consumed before LLM finished (read marker set)')
+    } catch (err) {
+      // Most likely the token already expired or was consumed elsewhere.
+      // Not fatal — the real response will still go out via push.
+      logger.warn({ err: err.message, lineUserId }, 'early ack reply failed')
+    }
+  }, deadlineMs)
+
+  return {
+    /**
+     * Call when the real response is ready. Clears the pending ack timer and
+     * returns the reply token if still usable (null if the ack already fired,
+     * forcing the caller to deliver via push).
+     */
+    finish() {
+      clearTimeout(timer)
+      if (consumed) return null
+      consumed = true
+      return replyToken
+    },
+  }
+}
