@@ -389,64 +389,67 @@ auth.get('/azure/start', asyncHandler(async (req, res) => {
 }))
 
 auth.get('/azure/callback', asyncHandler(async (req, res) => {
-  let client
   try {
-    client = await azureClient()
-  } catch (err) {
-    throw new AppError(503, 'AZURE_DISCOVERY_FAILED', `Azure discovery: ${err.message}`)
-  }
-  if (!client) throw new AppError(503, 'PROVIDER_NOT_CONFIGURED', 'Microsoft sign-in is not configured yet')
+    let client
+    try {
+      client = await azureClient()
+    } catch (err) {
+      throw new AppError(503, 'AZURE_DISCOVERY_FAILED', `Azure discovery: ${err.message}`)
+    }
+    if (!client) throw new AppError(503, 'PROVIDER_NOT_CONFIGURED', 'Microsoft sign-in is not configured yet')
 
-  if (req.query.error) {
-    throw new AppError(400, 'AZURE_AUTH_DENIED',
-      `Azure denied: ${req.query.error} — ${req.query.error_description || ''}`)
-  }
+    if (req.query.error) {
+      throw new AppError(400, 'AZURE_AUTH_DENIED',
+        `Azure denied: ${req.query.error} — ${req.query.error_description || ''}`)
+    }
 
-  // Look up the PKCE verifier from the in-memory store using the state that
-  // Azure echoed back. This replaces the old cookie-based approach that broke
-  // when browsers dropped SameSite cookies in the cross-site redirect chain.
-  const stateParam = typeof req.query.state === 'string' ? req.query.state : null
-  const stored = stateParam ? takeOidcState(stateParam) : null
-  if (!stored) {
-    throw new AppError(400, 'OIDC_STATE_NOT_FOUND',
-      'Login state expired or not found. Please try signing in again.')
-  }
+    const stateParam = typeof req.query.state === 'string' ? req.query.state : null
+    const stored = stateParam ? takeOidcState(stateParam) : null
+    if (!stored) {
+      throw new AppError(400, 'OIDC_STATE_NOT_FOUND',
+        'Login state expired or not found. Please try signing in again.')
+    }
 
-  const currentUrl = new URL(req.originalUrl, `${req.protocol}://${req.headers.host}`)
+    const currentUrl = new URL(req.originalUrl, `${req.protocol}://${req.headers.host}`)
 
-  let tokens
-  try {
-    tokens = await oidc.authorizationCodeGrant(client, currentUrl, {
-      expectedState:    stateParam,
-      pkceCodeVerifier: stored.codeVerifier,
+    let tokens
+    try {
+      tokens = await oidc.authorizationCodeGrant(client, currentUrl, {
+        expectedState:    stateParam,
+        pkceCodeVerifier: stored.codeVerifier,
+      })
+    } catch (err) {
+      const azureError   = err?.error || err?.code || 'UNKNOWN'
+      const azureDetail  = err?.error_description || err?.message || ''
+      const azureStatus  = err?.status || '?'
+      logger.error({ err, azureError, azureDetail, azureStatus,
+        expectedRedirectUri: process.env.AZURE_REDIRECT_URI,
+        derivedRedirectUri:  `${currentUrl.origin}${currentUrl.pathname}`,
+      }, 'Azure token exchange failed')
+      throw new AppError(502, 'AZURE_TOKEN_FAILED',
+        `Azure rejected (${azureStatus} ${azureError}): ${azureDetail}`)
+    }
+
+    const claims = tokens.claims()
+    const oid  = claims.oid || claims.sub
+    const admin = await admins.upsertFromAzure({
+      oid,
+      email: claims.email || claims.preferred_username,
+      name:  claims.name,
     })
+    const { token, expiresAt } = await admins.createSession(admin.id)
+    await admins.touchLastLogin(admin.id)
+    setSessionCookie(res, ADMIN_COOKIE, token, expiresAt)
+    res.redirect(frontendUrl(stored.returnTo || '/admin'))
   } catch (err) {
-    const azureError   = err?.error || err?.code || 'UNKNOWN'
-    const azureDetail  = err?.error_description || err?.message || ''
-    const azureStatus  = err?.status || '?'
-    logger.error({
-      err,
-      azureError,
-      azureDetail,
-      azureStatus,
-      expectedRedirectUri: process.env.AZURE_REDIRECT_URI,
-      derivedRedirectUri:  `${currentUrl.origin}${currentUrl.pathname}`,
-    }, 'Azure token exchange failed')
-    throw new AppError(502, 'AZURE_TOKEN_FAILED',
-      `Azure rejected (${azureStatus} ${azureError}): ${azureDetail}`)
+    // Surface the real error message directly so it's visible without
+    // digging through Railway structured logs.
+    logger.error({ err: err.stack || err, requestId: req.id }, 'Azure callback crashed')
+    const status = err instanceof AppError ? err.status : 500
+    const code   = err instanceof AppError ? err.code : 'INTERNAL_ERROR'
+    const message = err.message || String(err)
+    res.status(status).json({ ok: false, error: { code, message }, requestId: req.id })
   }
-
-  const claims = tokens.claims()
-  const oid  = claims.oid || claims.sub
-  const admin = await admins.upsertFromAzure({
-    oid,
-    email: claims.email || claims.preferred_username,
-    name:  claims.name,
-  })
-  const { token, expiresAt } = await admins.createSession(admin.id)
-  await admins.touchLastLogin(admin.id)
-  setSessionCookie(res, ADMIN_COOKIE, token, expiresAt)
-  res.redirect(frontendUrl(stored.returnTo || '/admin'))
 }))
 
 // ───────────────────────────── Mock login (dev only) ────────────────────────
