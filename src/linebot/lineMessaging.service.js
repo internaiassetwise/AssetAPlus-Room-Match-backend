@@ -286,7 +286,7 @@ export { isConfigured }
  * @param {string} [opts.ackMessage]        The brief message shown while the bot is "thinking"
  * @returns {{ finish: () => (string|null) }}  finish() returns the live token, or null if consumed
  */
-export function raceReplyToken(lineUserId, replyToken, { deadlineMs = 3_000, ackMessage = 'น้องห้องกำลังหาข้อมูลให้ค่ะ รอสักครู่...' } = {}) {
+export function raceReplyToken(lineUserId, replyToken, { deadlineMs = 3_000, ackMessage = '' } = {}) {
   if (!replyToken) {
     return { finish: () => null }
   }
