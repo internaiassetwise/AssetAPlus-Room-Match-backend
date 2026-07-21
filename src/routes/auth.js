@@ -33,6 +33,7 @@ import { requireAdmin, ADMIN_COOKIE, readCookie } from '../middleware/requireAdm
 import { rateLimit } from '../middleware/rateLimit.js'
 import { googleClient, azureClient } from '../auth/oidc.js'
 import { signState, verifyState } from '../auth/stateToken.js'
+import { save as saveOidcState, take as takeOidcState } from '../auth/oidcStateStore.js'
 import {
   USER_COOKIE, LANDLORD_COOKIE,
   oidcCookieStore, sanitizeReturn, flushOidcCookies,
@@ -380,10 +381,10 @@ auth.get('/azure/start', asyncHandler(async (req, res) => {
     code_challenge:        codeChallenge,
     code_challenge_method: 'S256',
   })
-  oidcCookieStore.set(res, req)('oidc_state', state)
-  oidcCookieStore.set(res, req)('oidc_code_verifier', codeVerifier)
-  oidcCookieStore.set(res, req)('oidc_return_to', returnTo)
-  flushOidcCookies(req, res)
+  // Store PKCE verifier + return path server-side, keyed by the state value
+  // that Azure echoes back in the callback URL. No cookies needed — avoids
+  // the cross-site SameSite/ITP cookie-dropping problem entirely.
+  saveOidcState(state, codeVerifier, returnTo)
   res.redirect(authUrl.href)
 }))
 
@@ -396,41 +397,30 @@ auth.get('/azure/callback', asyncHandler(async (req, res) => {
   }
   if (!client) throw new AppError(503, 'PROVIDER_NOT_CONFIGURED', 'Microsoft sign-in is not configured yet')
 
-  // Azure redirects with ?code=...&state=... on success, or ?error=... on failure.
   if (req.query.error) {
     throw new AppError(400, 'AZURE_AUTH_DENIED',
       `Azure denied: ${req.query.error} — ${req.query.error_description || ''}`)
   }
 
-  const currentUrl = new URL(req.originalUrl, `${req.protocol}://${req.headers.host}`)
-
-  // Check whether the OIDC state cookie survived the Microsoft → backend
-  // redirect. If it's missing, the cookie was dropped (SameSite / ITP).
-  const savedState = readCookie(req, 'oidc_state')
-  const savedVerifier = readCookie(req, 'oidc_code_verifier')
-  if (!savedState || !savedVerifier) {
-    logger.error({
-      hasState: !!savedState,
-      hasVerifier: !!savedVerifier,
-      cookieHeader: req.headers.cookie?.slice(0, 200),
-      protocol: req.protocol,
-      host: req.headers.host,
-    }, 'Azure callback: OIDC state/PKCE cookies missing')
-    throw new AppError(400, 'OIDC_COOKIE_LOST',
-      'State/PKCE cookie was lost during Microsoft redirect. Check SameSite/Secure settings.')
+  // Look up the PKCE verifier from the in-memory store using the state that
+  // Azure echoed back. This replaces the old cookie-based approach that broke
+  // when browsers dropped SameSite cookies in the cross-site redirect chain.
+  const stateParam = typeof req.query.state === 'string' ? req.query.state : null
+  const stored = stateParam ? takeOidcState(stateParam) : null
+  if (!stored) {
+    throw new AppError(400, 'OIDC_STATE_NOT_FOUND',
+      'Login state expired or not found. Please try signing in again.')
   }
+
+  const currentUrl = new URL(req.originalUrl, `${req.protocol}://${req.headers.host}`)
 
   let tokens
   try {
     tokens = await oidc.authorizationCodeGrant(client, currentUrl, {
-      expectedState:    savedState,
-      pkceCodeVerifier: savedVerifier,
+      expectedState:    stateParam,
+      pkceCodeVerifier: stored.codeVerifier,
     })
   } catch (err) {
-    // openid-client wraps Azure's token-endpoint error in a ResponseBodyError
-    // with { error, error_description, status, body }. Extract the real cause
-    // so the user sees WHY Azure rejected it (invalid_client, invalid_grant,
-    // redirect_uri mismatch, expired secret, etc.) instead of a generic message.
     const azureError   = err?.error || err?.code || 'UNKNOWN'
     const azureDetail  = err?.error_description || err?.message || ''
     const azureStatus  = err?.status || '?'
@@ -439,7 +429,6 @@ auth.get('/azure/callback', asyncHandler(async (req, res) => {
       azureError,
       azureDetail,
       azureStatus,
-      currentUrl: currentUrl.href,
       expectedRedirectUri: process.env.AZURE_REDIRECT_URI,
       derivedRedirectUri:  `${currentUrl.origin}${currentUrl.pathname}`,
     }, 'Azure token exchange failed')
@@ -457,10 +446,7 @@ auth.get('/azure/callback', asyncHandler(async (req, res) => {
   const { token, expiresAt } = await admins.createSession(admin.id)
   await admins.touchLastLogin(admin.id)
   setSessionCookie(res, ADMIN_COOKIE, token, expiresAt)
-  res.clearCookie('oidc_state',         { path: '/' })
-  res.clearCookie('oidc_code_verifier', { path: '/' })
-  res.clearCookie('oidc_return_to',     { path: '/' })
-  res.redirect(readCookie(req, 'oidc_return_to') || '/admin')
+  res.redirect(frontendUrl(stored.returnTo || '/admin'))
 }))
 
 // ───────────────────────────── Mock login (dev only) ────────────────────────
