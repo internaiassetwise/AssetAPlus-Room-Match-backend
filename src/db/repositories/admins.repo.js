@@ -86,14 +86,19 @@ export async function touchLastLogin(adminId) {
  * `display_name` is only filled when previously NULL, so manual renames stick.
  */
 export async function upsertFromAzure({ oid, email, name }) {
+  // The admins table has NOT NULL on username + password_hash (designed for
+  // local login). Azure SSO admins don't have these, so we derive a unique
+  // username from the email (or oid fallback) and set a sentinel hash that
+  // can never match a real bcrypt password — preventing local-login bypass.
+  const username = email || `azure:${oid.slice(0, 24)}`
   await pool.query(
-    `INSERT INTO admins (azure_oid, display_name, email, is_active, last_login_at)
-     VALUES ($1, $2, $3, TRUE, NOW())
+    `INSERT INTO admins (username, password_hash, azure_oid, display_name, email, is_active, last_login_at)
+     VALUES ($1, $2, $3, $4, $5, TRUE, NOW())
      ON CONFLICT (azure_oid) DO UPDATE
        SET email         = EXCLUDED.email,
            display_name  = COALESCE(EXCLUDED.display_name, admins.display_name),
            last_login_at = NOW()`,
-    [oid, name || null, email || null],
+    [username, '!azure-sso-no-password', oid, name || null, email || null],
   )
   const { rows } = await pool.query(
     'SELECT id, username, display_name, email, azure_oid, is_active FROM admins WHERE azure_oid = $1',
