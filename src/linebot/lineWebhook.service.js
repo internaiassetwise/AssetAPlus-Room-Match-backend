@@ -109,9 +109,24 @@ async function processEvent(ev, { handle, handleImage }) {
       if (await routeToLiveAgent(lineUserId, ev)) return
       await handlePostback(lineUserId, ev?.postback?.data, replyToken)
     } else if (eventType === 'follow' && lineUserId) {
-      // New friend added the bot — send a welcome + the quick-reply menu so
-      // desktop users (no Rich Menu) immediately see how to get started. Rides
-      // the FREE reply path (postback/follow events carry a reply token).
+      // New friend added the bot — find-or-create a tenant row so they appear
+      // in /admin/tenants immediately. Fetch their display name from Line so
+      // the admin sees a real name instead of "Line user xxx".
+      try {
+        let tenant = await findTenantByLineId(lineUserId)
+        if (!tenant) tenant = await createTenantFromBot(lineUserId)
+        // Refresh name + picture from Line profile (only fills placeholder names).
+        if (lineMessaging.isConfigured()) {
+          const profile = await lineMessaging.getProfile(lineUserId).catch(() => null)
+          if (profile) {
+            const { refreshFromLine } = await import('../db/repositories/tenants.repo.js')
+            await refreshFromLine(tenant.id, { displayName: profile.displayName, pictureUrl: profile.pictureUrl })
+          }
+        }
+      } catch (err) {
+        logger.error({ err, lineUserId }, 'follow: failed to create tenant row')
+      }
+      // Send welcome + quick-reply menu (rides the FREE reply path).
       await lineMessaging.replyOrPush(lineUserId, replyToken, { ...welcome(), quickReply: menuQuickReply() })
     }
     // 'unfollow','leave', etc. → no-op (audit-logged above)
