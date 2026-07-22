@@ -312,12 +312,27 @@ auth.get('/line/callback', asyncHandler(async (req, res) => {
 
   // Link the Line identity to tenant and/or landlord rows. A user can be both,
   // so we look in BOTH tables and set a session for every row that exists.
-  // Brand-new users are ALWAYS seeded as tenants — a public web login must never
-  // mint a landlord account (that's an admin/bot-only action). The ?role= hint
-  // only affects the post-login landing page, not which account is created.
+  // The ?role= hint (carried in the state token as payload.r) determines which
+  // role to CREATE if the user doesn't have it yet — so a tenant can swap to
+  // landlord (and vice versa) by picking the other role on the login page.
+  const role = payload.r || 'tenant'
+
   let tenant   = await tenants.findByLineId(lineUserId)
   let landlord = await landlords.findByLineId(lineUserId)
+
   if (!tenant && !landlord) {
+    // Brand-new user — always seed as tenant first.
+    tenant = await tenants.createFromBot(lineUserId)
+  }
+
+  // Role swap: the user explicitly picked a role they don't have yet.
+  // Create the missing row so both sessions can coexist on the same Line
+  // account. This lets a tenant become a landlord (and vice versa) without
+  // admin intervention.
+  if (role === 'landlord' && !landlord) {
+    landlord = await landlords.createFromBot(lineUserId)
+  }
+  if (role === 'tenant' && !tenant) {
     tenant = await tenants.createFromBot(lineUserId)
   }
 
