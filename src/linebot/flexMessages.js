@@ -103,25 +103,33 @@ export function roomCard(room = {}) {
   const body = {
     type: 'box', layout: 'vertical', spacing: 'sm', contents: [
       { type: 'text', text: room.title || 'ห้องเช่า', weight: 'bold', size: 'lg', wrap: true, color: '#1A1A1A' },
+      // Identify the room by its room number (roomCode) when present, so users
+      // (and the bot) refer to a room by "ห้อง A-301" rather than an internal id.
+      ...(room.roomCode ? [{ type: 'text', text: `ห้อง ${room.roomCode}`, size: 'sm', color: '#6B7280', wrap: true }] : []),
       { type: 'text', text: rentText(room.price), weight: 'bold', size: 'md', color: '#0A7C3B' },
       ...(specs ? [{ type: 'text', text: specs, size: 'sm', color: '#6B7280', wrap: true }] : []),
       ...(room.zone ? [{ type: 'text', text: `ย่าน${room.zone}`, size: 'sm', color: '#6B7280' }] : []),
     ],
   }
+  // Human-facing labels use the room number (roomCode); the internal id travels
+  // invisibly in the postback `data` so tool lookups stay reliable even though
+  // the user never sees the id. Fall back to "ห้องนี้" when a room has no code.
+  const viewingText = room.roomCode ? `อยากนัดชมห้อง ${room.roomCode}` : 'อยากนัดชมห้องนี้'
+  const detailText  = room.roomCode ? `ขอดูรายละเอียดห้อง ${room.roomCode}` : 'ขอดูรายละเอียดห้องนี้'
+
   // ดูรายละเอียด opens the room's page on the website when a web origin is
-  // configured (WEB_BASE_URL, falling back to APP_BASE_URL). Line URI buttons
-  // accept http too, so http://localhost works for local testing (images are the
-  // only thing that strictly needs https). With no origin it falls back to a
-  // message action that triggers getRoomDetails in chat.
+  // configured (WEB_BASE_URL, falling back to APP_BASE_URL). With no origin it
+  // falls back to a postback that triggers getRoomDetails in chat — the postback
+  // shows the room number (displayText) while carrying the id (data).
   const webOrigin = config.WEB_BASE_URL || config.APP_BASE_URL
   const detailAction = webOrigin && /^https?:\/\//i.test(webOrigin)
     ? { type: 'uri', label: 'ดูรายละเอียด', uri: `${webOrigin.replace(/\/+$/, '')}/rooms/${room.id}` }
-    : { type: 'message', label: 'ดูรายละเอียด', text: `ดูห้อง ${room.id}` }
+    : { type: 'postback', label: 'ดูรายละเอียด', data: `action=details&roomId=${room.id}`, displayText: detailText }
 
   const footer = {
     type: 'box', layout: 'vertical', spacing: 'sm', contents: [
       { type: 'button', style: 'primary', color: '#1F4068',
-        action: { type: 'message', label: 'อยากนัดชม', text: `อยากนัดชมห้อง ${room.id}` } },
+        action: { type: 'postback', label: 'อยากนัดชม', data: `action=viewing&roomId=${room.id}`, displayText: viewingText } },
       { type: 'button', style: 'secondary', action: detailAction },
     ],
   }
@@ -270,7 +278,10 @@ export function pendingListing({ title, roomId } = {}) {
       title: '🏠 ส่งประกาศเรียบร้อย',
       bodyLines: [
         title ? `ห้อง: ${title}` : '',
-        roomId ? `เลขห้อง: ${roomId}` : '',
+        // Reference number (internal id), NOT the room number — landlord chat
+        // drafts don't carry a room code, so labelling this "เลขห้อง" would be
+        // misleading. Admins use it to locate the pending listing.
+        roomId ? `หมายเลขอ้างอิง: ${roomId}` : '',
         'สถานะ: รอแอดมินตรวจสอบ',
         'พอแอดมินอนุมัติ ห้องจะขึ้นบนเว็บทันทีค่ะ',
       ],

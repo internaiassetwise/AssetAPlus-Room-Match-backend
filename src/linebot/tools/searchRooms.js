@@ -126,6 +126,7 @@ export async function handler(args, ctx) {
     count: rooms.length,
     rooms: rooms.map((r) => ({
       id: r.id,
+      roomCode: r.roomCode ?? null,
       title: r.title,
       price: r.price,
       beds: r.beds,

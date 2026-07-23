@@ -178,8 +178,10 @@ async function routeToLiveAgent(lineUserId, ev) {
 }
 
 /**
- * Deterministic postback dispatcher (no LLM). Data is a query string set by the
- * Flex button, e.g. `action=book&slotId=5`. Today only `book` is supported.
+ * Deterministic postback dispatcher. Data is a query string set by the Flex
+ * button, e.g. `action=book&slotId=5`. Supported actions: `book` (deterministic
+ * slot booking), and `viewing`/`details` (room-card taps that re-enter the agent
+ * with the internal roomId, so the user sees the room number but lookups use id).
  */
 export async function handlePostback(lineUserId, dataStr, replyToken = null) {
   if (!lineUserId) return
@@ -191,6 +193,20 @@ export async function handlePostback(lineUserId, dataStr, replyToken = null) {
     const slotId = Number(params.get('slotId'))
     if (Number.isInteger(slotId)) await bookSlot(lineUserId, slotId, replyToken)
     else await lineMessaging.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ ไม่สามารถจองได้ (ข้อมูลไม่ถูกต้อง)')
+  } else if (action === 'viewing' || action === 'details') {
+    // Room cards send these when the user taps อยากนัดชม / ดูรายละเอียด. The
+    // button shows the room NUMBER (displayText) while the internal id rides in
+    // `data`, so we re-enter the normal agent path with an id-bearing phrase —
+    // scheduleViewing / getRoomDetails then resolve the room reliably by id and
+    // the model replies in the user's language, exactly as a typed message would.
+    const roomId = Number(params.get('roomId'))
+    if (Number.isInteger(roomId)) {
+      const { handle } = await import('./chatAgent.service.js')
+      const phrase = action === 'viewing' ? `อยากนัดชมห้อง ${roomId}` : `ดูห้อง ${roomId}`
+      await handle(lineUserId, phrase, replyToken)
+    } else {
+      await lineMessaging.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ ไม่พบข้อมูลห้อง (ข้อมูลไม่ถูกต้อง)')
+    }
   }
   // Unknown actions are no-ops (logged above).
 }
