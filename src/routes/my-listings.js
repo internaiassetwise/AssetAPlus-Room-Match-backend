@@ -19,6 +19,7 @@ import multer from 'multer'
 import * as repo from '../db/repositories/rooms.repo.js'
 import * as landlordRepo from '../db/repositories/landlords.repo.js'
 import { detectImageExt } from '../services/fileSignature.service.js'
+import { resizeForWeb } from '../services/imageResize.service.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate }     from '../middleware/validate.js'
 import { requireBot }   from '../middleware/requireBot.js'
@@ -205,11 +206,12 @@ myListings.post('/:id/photos', requireBot, photoUpload.single('photo'),
     if (!ext) {
       throw new AppError(400, 'BAD_IMAGE', 'ไฟล์ไม่ใช่รูปภาพที่รองรับ (รองรับ jpg/png/webp/gif)')
     }
+    const optimized = await resizeForWeb(req.file.buffer)
     const fileName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`
     const dir = path.join(process.cwd(), 'uploads', 'rooms', String(roomId))
     await fs.mkdir(dir, { recursive: true })
     const fullPath = path.join(dir, fileName)
-    await fs.writeFile(fullPath, req.file.buffer)
+    await fs.writeFile(fullPath, optimized)
 
     // Public URL the Line bot will use as the image src in subsequent replies.
     // Prefer the configured public origin (reliable behind a proxy); the

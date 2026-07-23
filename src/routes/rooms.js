@@ -6,6 +6,7 @@ import * as repo from '../db/repositories/rooms.repo.js'
 import * as slotsRepo from '../db/repositories/viewingSlots.repo.js'
 import * as roomImages from '../db/repositories/roomImages.repo.js'
 import { detectImageExt } from '../services/fileSignature.service.js'
+import { resizeForWeb } from '../services/imageResize.service.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate } from '../middleware/validate.js'
 import { AppError } from '../middleware/AppError.js'
@@ -179,6 +180,10 @@ rooms.post('/:id/photos', requireAdmin, validate({ params: idParam }), photoUplo
       throw new AppError(400, 'BAD_IMAGE', 'ไฟล์ไม่ใช่รูปภาพที่รองรับ (รองรับ jpg/png/webp/gif)')
     }
 
+    // Resize before saving — phone photos are 3-10 MB; this drops them
+    // to ~300 KB (1200px max, JPEG q82) with no visible quality loss.
+    const optimized = await resizeForWeb(req.file.buffer)
+
     const fs = await import('node:fs/promises')
     const path = await import('node:path')
     const crypto = await import('node:crypto')
@@ -186,7 +191,7 @@ rooms.post('/:id/photos', requireAdmin, validate({ params: idParam }), photoUplo
     const fileName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`
     const dir = path.join(process.cwd(), 'uploads', 'rooms', String(roomId))
     await fs.mkdir(dir, { recursive: true })
-    await fs.writeFile(path.join(dir, fileName), req.file.buffer)
+    await fs.writeFile(path.join(dir, fileName), optimized)
 
     // Prefer the configured public origin (reliable behind a proxy); the
     // req.protocol fallback is correct now that `trust proxy` is set.

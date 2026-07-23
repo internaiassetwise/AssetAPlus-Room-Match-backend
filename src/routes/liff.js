@@ -17,6 +17,7 @@ import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { AppError }     from '../middleware/AppError.js'
 import { rateLimit }    from '../middleware/rateLimit.js'
 import { detectImageExt } from '../services/fileSignature.service.js'
+import { resizeForWeb } from '../services/imageResize.service.js'
 import { config } from '../config.js'
 import * as landlords   from '../db/repositories/landlords.repo.js'
 import { findByName }   from '../db/repositories/zones.repo.js'
@@ -336,8 +337,9 @@ liff.post('/listing/submit',
       // confusion → stored XSS). Skip anything that isn't a supported image.
       const ext = detectImageExt(file.buffer)
       if (!ext) continue
+      const optimized = await resizeForWeb(file.buffer)
       const fileName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`
-      await fs.writeFile(path.join(dir, fileName), file.buffer)
+      await fs.writeFile(path.join(dir, fileName), optimized)
       const origin = (config.APP_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '')
       const publicUrl = `${origin}/uploads/rooms/${room.id}/${fileName}`
       await roomImages.create(room.id, publicUrl, fileName)
