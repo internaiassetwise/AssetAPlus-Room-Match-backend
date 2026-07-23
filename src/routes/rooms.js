@@ -32,6 +32,7 @@ const photoUpload = multer({
 const listQuery = z.object({
   zone:    z.string().optional(),
   type:    z.string().optional(),
+  roomType:z.string().optional(),
   maxRent: z.coerce.number().int().positive().optional(),
   minRent: z.coerce.number().int().nonnegative().optional(),
   beds:    z.coerce.number().int().nonnegative().optional(),

@@ -27,7 +27,7 @@ function classify(method, path) {
   if (!MUTATING.has(method)) return null
 
   // Normalise: strip /api/v1 prefix, collapse trailing slashes.
-  const p = path.replace(/^\/api\/v1\b/, '').replace(/\/+$/, '')
+  const p = path.replace(/^\/api(?:\/v1)?\b/, '').replace(/\/+$/, '')
 
   // rooms
   let m
@@ -73,12 +73,15 @@ function classify(method, path) {
  * out the door — the audit insert can't delay or break the request.
  */
 export function auditAdmin(req, res, next) {
-  if (!req.admin || !MUTATING.has(req.method)) return next()
+  if (!MUTATING.has(req.method)) return next()
 
-  const cls = classify(req.method, req.originalUrl || req.path)
-  if (!cls) return next()
-
+  // Attach the listener NOW (before requireAdmin runs), but check req.admin
+  // INSIDE the callback — by the time 'finish' fires, requireAdmin has
+  // populated req.admin for authenticated routes.
   res.on('finish', () => {
+    if (!req.admin) return
+    const cls = classify(req.method, req.originalUrl || req.path)
+    if (!cls) return
     adminActions.log({
       adminId:     req.admin.id,
       azureOid:    req.admin.azureOid,

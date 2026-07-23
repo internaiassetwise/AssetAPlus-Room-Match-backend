@@ -32,7 +32,7 @@ export async function list({ status, tenantId, roomId, limit = 50 } = {}) {
      LIMIT $4`,
     [status ?? null, tenantId ?? null, roomId ?? null, Math.min(limit, 200)],
   )
-  return rows
+  return rows.map(rowToMatch)
 }
 
 export async function create({ tenantId, roomId, status = 'suggested', matchScore = null, agentNote = null }) {
@@ -186,4 +186,26 @@ export async function suggestForTenant(tenantId, limit = 10) {
   }
 
   return ranked.rows
+}
+
+/** Convert a raw snake_case match row to camelCase for the API. */
+function rowToMatch(row) {
+  return {
+    id:          row.id,
+    tenantId:    row.tenant_id,
+    roomId:      row.room_id,
+    status:      row.status,
+    matchScore:  row.match_score,
+    agentNote:   row.agent_note,
+    createdAt:   row.created_at,
+    updatedAt:   row.updated_at,
+    tenantName:  row.tenant_name,
+    tenantPhone: row.tenant_phone,
+    roomTitle:   row.room_title,
+    roomRent:    row.room_rent,
+    roomBedrooms:row.room_bedrooms,
+    roomType:    row.room_type,
+    zoneName:    row.zone_name,
+    zoneSlug:    row.zone_slug,
+  }
 }

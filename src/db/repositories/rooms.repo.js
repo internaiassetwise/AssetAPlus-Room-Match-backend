@@ -28,7 +28,7 @@ const SELECT_ROOM = `
  *                    (rooms without a lat/lng are excluded when bounds is set)
  */
 export async function findAvailable({
-  zone, type, maxRent, minRent, beds, bounds, limit = 50,
+  zone, type, roomType, maxRent, minRent, beds, bounds, limit = 50,
 } = {}) {
   // Parse bounds — null when missing or malformed.
   let b = null
@@ -41,27 +41,29 @@ export async function findAvailable({
      WHERE r.status = 'available'
        AND ($1::text IS NULL OR z.slug = $1)
        AND ($2::text IS NULL OR r.property_type = $2)
-       AND ($3::int  IS NULL OR r.monthly_rent <= $3)
-       AND ($4::int  IS NULL OR r.monthly_rent >= $4)
-       AND ($5::int  IS NULL OR r.bedrooms >= $5)
-       AND ($6::text IS NULL OR (
-             r.lat BETWEEN $7 AND $9
-         AND r.lng BETWEEN $8 AND $10
+       AND ($3::text IS NULL OR r.room_type = $3)
+       AND ($4::int  IS NULL OR r.monthly_rent <= $4)
+       AND ($5::int  IS NULL OR r.monthly_rent >= $5)
+       AND ($6::int  IS NULL OR r.bedrooms >= $6)
+       AND ($7::text IS NULL OR (
+             r.lat BETWEEN $8 AND $10
+         AND r.lng BETWEEN $9 AND $11
        ))
      ORDER BY r.is_featured DESC, r.view_count DESC, r.created_at DESC
-     LIMIT $11`,
+     LIMIT $12`,
     [
       zone ?? null,            // $1 zone slug
-      type ?? null,            // $2 property_type
-      maxRent ?? null,         // $3
-      minRent ?? null,         // $4
-      beds ?? null,            // $5 minimum bedrooms (>=)
-      b ? 'set' : null,        // $6 bounds sentinel
-      b ? b[0] : null,         // $7 swLat
-      b ? b[1] : null,         // $8 swLng
-      b ? b[2] : null,         // $9 neLat
-      b ? b[3] : null,         // $10 neLng
-      Math.min(limit, 200),    // $11
+      type ?? null,            // $2 property_type (old: condo/house/etc)
+      roomType ?? null,        // $3 room_type (new: STUDIO/1 BEDROOM/etc)
+      maxRent ?? null,         // $4
+      minRent ?? null,         // $5
+      beds ?? null,            // $6 minimum bedrooms (>=)
+      b ? 'set' : null,        // $7 bounds sentinel
+      b ? b[0] : null,         // $8 swLat
+      b ? b[1] : null,         // $9 swLng
+      b ? b[2] : null,         // $10 neLat
+      b ? b[3] : null,         // $11 neLng
+      Math.min(limit, 200),    // $12
     ]
   )
   return rows.map(rowToRoom)
