@@ -40,11 +40,17 @@ const listQuery = z.object({
 })
 
 const writeBody = z.object({
-  landlordId:    z.coerce.number().int().positive(),
+  landlordId:    z.coerce.number().int().positive().optional(),
   zoneId:        z.coerce.number().int().positive(),
   title:         z.string().trim().min(2, 'กรุณากรอกชื่อห้อง').max(200),
   description:   z.string().max(5000).optional().or(z.literal('')),
-  propertyType:  z.enum(['condo', 'house', 'townhouse', 'apartment', 'studio']),
+  propertyType:  z.enum(['condo', 'house', 'townhouse', 'apartment', 'studio']).optional(),
+  roomType:      z.string().trim().max(60).optional().nullable(),
+  projectName:   z.string().trim().max(200).optional().nullable(),
+  roomCode:      z.string().trim().max(60).optional().nullable(),
+  building:      z.string().trim().max(40).optional().nullable(),
+  floor:         z.coerce.number().int().min(-10).max(200).optional().nullable(),
+  viewType:      z.string().trim().max(60).optional().nullable(),
   bedrooms:      z.coerce.number().int().min(0).max(10),
   bathrooms:     z.coerce.number().int().min(0).max(10),
   sizeSqm:       z.coerce.number().min(1).max(2000).optional(),

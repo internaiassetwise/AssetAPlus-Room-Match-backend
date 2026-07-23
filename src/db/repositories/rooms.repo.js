@@ -11,6 +11,7 @@ const SELECT_ROOM = `
     r.amenities, r.is_featured, r.view_count,
     r.created_at, r.updated_at,
     r.created_by_line_user_id, r.approved_at, r.approved_by,
+    r.project_name, r.room_code, r.building, r.floor, r.view_type, r.room_type,
     z.slug AS zone_slug, z.name_th AS zone_name_th,
     (SELECT url FROM room_images WHERE room_id = r.id ORDER BY sort_order LIMIT 1) AS image_url
   FROM rooms r
@@ -89,19 +90,23 @@ export async function create(input) {
     monthlyRent, status = 'available', availableFrom = null,
     amenities = [], isFeatured = false,
     lat = null, lng = null, address = null,
+    projectName = null, roomCode = null, building = null,
+    floor = null, viewType = null, roomType = null,
   } = input
   const { rows } = await query(
     `INSERT INTO rooms (landlord_id, zone_id, title, description, property_type,
                         bedrooms, bathrooms, size_sqm, monthly_rent, status,
                         available_from, amenities, is_featured,
-                        lat, lng, address)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16)
+                        lat, lng, address,
+                        project_name, room_code, building, floor, view_type, room_type)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
      RETURNING id`,
     [
       landlordId, zoneId, title, description, propertyType,
       bedrooms, bathrooms, sizeSqm ?? 0, monthlyRent, status,
       availableFrom, JSON.stringify(amenities), isFeatured,
       lat ?? null, lng ?? null, address ?? null,
+      projectName, roomCode, building, floor, viewType, roomType,
     ],
   )
   return findById(rows[0].id)
@@ -128,6 +133,12 @@ export async function update(id, fields) {
     lat:           'lat',
     lng:           'lng',
     address:       'address',
+    projectName:   'project_name',
+    roomCode:      'room_code',
+    building:      'building',
+    floor:         'floor',
+    viewType:      'view_type',
+    roomType:      'room_type',
   }
   for (const [k, v] of Object.entries(fields)) {
     if (v === undefined) continue
