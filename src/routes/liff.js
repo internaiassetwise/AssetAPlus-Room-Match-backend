@@ -115,11 +115,11 @@ function renderListingHtml(liffId, submitUrl) {
         <option value="">— เลือกย่าน —</option>
         <option value="ลาดพร้าว">ลาดพร้าว</option>
         <option value="รัชดา-ห้วยขวาง">รัชดา-ห้วยขวาง</option>
+        <option value="ศรีสมาน">ศรีสมาน</option>
         <option value="อ่อนนุช">อ่อนนุช</option>
         <option value="เกษตร">เกษตร</option>
         <option value="แจ้งวัฒนะ">แจ้งวัฒนะ</option>
         <option value="ศาลายา">ศาลายา</option>
-        <option value="ศรีสมาน">ศรีสมาน</option>
         <option value="นครปฐม">นครปฐม</option>
         <option value="อื่นๆ">อื่นๆ</option>
       </select>

@@ -5,16 +5,14 @@
 
 -- ---------- ZONES ----------
 INSERT INTO zones (slug, name_th, name_en, sort_order) VALUES
-  ('asoke',    'อโศก',     'Asoke',       10),
-  ('phrom',    'พร้อมพงษ์', 'Phrom Phong', 20),
-  ('thon',     'ทองหล่อ',   'Thonglor',    30),
-  ('ekkamai',  'เอกมัย',    'Ekkamai',     40),
-  ('ari',      'อารีย์',    'Ari',         50),
-  ('latphrao', 'ลาดพร้าว',  'Lat Phrao',   60),
-  ('ratchada', 'รัชดา',     'Ratchada',    70),
-  ('bangna',   'บางนา',     'Bang Na',     80),
-  ('sathorn',  'สาทร',      'Sathorn',     90),
-  ('silom',    'สีลม',      'Silom',      100)
+  ('ladprao',     'ลาดพร้าว',          'Lat Phrao',            10),
+  ('ratchada',    'รัชดา-ห้วยขวาง',     'Ratchada-Huaikwang',   20),
+  ('srisaman',    'ศรีสมาน',           'Srisaman',             30),
+  ('onnut',       'อ่อนนุช',            'Onnut',                40),
+  ('kaset',       'เกษตร',             'Kaset',                50),
+  ('chaengwattana','แจ้งวัฒนะ',         'Chaengwattana',        60),
+  ('salaya',      'ศาลายา',            'Salaya',               70),
+  ('nakornpathom','นครปฐม',            'Nakorn Pathom',        80)
 ON CONFLICT (slug) DO NOTHING;
 
 -- ---------- LANDLORDS ----------
