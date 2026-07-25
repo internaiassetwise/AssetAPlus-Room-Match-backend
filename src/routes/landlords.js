@@ -20,6 +20,19 @@ const listQuery = z.object({
 
 const idParam = z.object({ id: z.coerce.number().int().positive() })
 
+// Admin-created landlords (legacy owners onboarded manually). fullName + phone
+// are required; line_id is optional and usually omitted — the LINE identity is
+// bound later, not at intake (see docs/LEGACY_LANDLORD_ONBOARDING.md).
+const createBody = z.object({
+  fullName:    z.string().trim().min(1, 'กรุณากรอกชื่อเจ้าของห้อง').max(160),
+  phone:       z.string().trim().min(8, 'เบอร์โทรไม่ถูกต้อง').max(40),
+  email:       z.string().trim().email('อีเมลไม่ถูกต้อง').max(160).nullable().optional(),
+  lineId:      z.string().trim().max(80).nullable().optional(),
+  companyName: z.string().trim().max(160).nullable().optional(),
+  taxId:       z.string().trim().max(40).nullable().optional(),
+  note:        z.string().trim().max(1000).nullable().optional(),
+})
+
 const patchBody = z.object({
   fullName:    z.string().trim().min(1).max(160).optional(),
   phone:       z.string().trim().min(8).max(40).optional(),
@@ -33,6 +46,20 @@ const patchBody = z.object({
 
 landlords.get('/', validate({ query: listQuery }), asyncHandler(async (req, res) => {
   res.json(await repo.list(req.query))
+}))
+
+landlords.post('/', validate({ body: createBody }), asyncHandler(async (req, res) => {
+  // If a lineId is supplied, refuse to create a second landlord bound to the same
+  // LINE identity — that would fork one owner into two rows. (The DB-level unique
+  // index arrives with Phase 0 of the legacy-onboarding plan; this guard gives a
+  // friendly 409 in the meantime.)
+  if (req.body.lineId) {
+    const existing = await repo.findByLineId(req.body.lineId)
+    if (existing) {
+      throw new AppError(409, 'LANDLORD_LINE_EXISTS', 'มีเจ้าของห้องที่ผูกกับ Line ID นี้อยู่แล้ว')
+    }
+  }
+  res.status(201).json(await repo.create(req.body))
 }))
 
 landlords.get('/:id', validate({ params: idParam }), asyncHandler(async (req, res) => {

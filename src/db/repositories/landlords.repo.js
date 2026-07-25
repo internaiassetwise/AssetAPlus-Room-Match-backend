@@ -23,6 +23,34 @@ export async function list({ isActive, limit = 100 } = {}) {
   return rows.map(rowToLandlord)
 }
 
+/**
+ * Create a landlord from admin-entered data. Used to onboard the pre-webapp
+ * ("legacy") owners whose rooms were deposited before this platform existed:
+ * admin captures name + phone now; line_id is usually NULL because the LINE
+ * identity is not known at intake time (it is bound later — see
+ * docs/LEGACY_LANDLORD_ONBOARDING.md). Defaults source to 'legacy' so these
+ * rows are distinguishable from 'line-bot' stubs and 'website' signups.
+ */
+export async function create(fields) {
+  const {
+    fullName,
+    phone,
+    email = null,
+    lineId = null,
+    companyName = null,
+    taxId = null,
+    note = null,
+    source = 'legacy',
+  } = fields
+  const { rows } = await query(
+    `INSERT INTO landlords (full_name, phone, email, line_id, company_name, tax_id, note, source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id`,
+    [fullName, phone, email, lineId, companyName, taxId, note, source],
+  )
+  return findById(rows[0].id)
+}
+
 export async function findById(id) {
   const { rows } = await query(
     `SELECT l.*,
