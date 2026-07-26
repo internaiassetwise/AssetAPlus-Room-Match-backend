@@ -6,6 +6,7 @@ import { logger }         from './logger.js'
 import { ping, close as closePool } from './db/pool.js'
 import { ensureBootstrapAdmin } from './db/repositories/admins.repo.js'
 import { createApp }      from './app.js'
+import { start as startViewingReminders, stop as stopViewingReminders } from './linebot/viewingReminder.service.js'
 
 async function main() {
   // 1. Verify the DB is reachable BEFORE we accept traffic.
@@ -30,6 +31,9 @@ async function main() {
   server.listen(config.PORT, () => {
     logger.info(`🚀 Room Match API on http://localhost:${config.PORT}`)
     logger.info(`   env=${config.NODE_ENV}  cors=${config.CORS_ORIGIN}`)
+    // Start the upcoming-viewing LINE reminder scheduler (only in the real
+    // server process — never in scripts/tests that just import the repos).
+    startViewingReminders()
   })
 
   // 4. Graceful shutdown.
@@ -38,6 +42,7 @@ async function main() {
     if (shuttingDown) return
     shuttingDown = true
     logger.info({ signal }, 'shutting down…')
+    stopViewingReminders()
     server.close(async () => {
       try { await closePool() } catch (e) { logger.warn({ e }, 'pool end errored') }
       logger.info('bye 👋')

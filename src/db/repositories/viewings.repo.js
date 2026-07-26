@@ -135,6 +135,45 @@ export async function countUpcomingForLandlord(landlordId) {
 }
 
 /**
+ * Atomically CLAIM the viewings that are due for a reminder in one window and
+ * stamp them as sent, returning the claimed rows (with room title) so the caller
+ * can push the LINE message. Doing the claim in a single UPDATE…RETURNING makes
+ * it safe under restarts and multiple app instances — each viewing is claimed by
+ * exactly one caller, so no reminder is sent twice.
+ *
+ * Windows (both exclude declined/cancelled/completed and tenants with no LINE id):
+ *   '24h' → scheduled 2h..24h from now  (the "you have a viewing" heads-up)
+ *   '2h'  → scheduled 0..2h  from now    (the "it's almost time" nudge)
+ * The 24h window stops at 2h so a viewing booked <2h out only gets the 2h nudge,
+ * never both at once.
+ *
+ * @param {'24h'|'2h'} windowKind
+ * @returns {Promise<Array<{id:number, room_id:number, tenant_line_user_id:string, scheduled_for:string, room_title:string}>>}
+ */
+export async function claimDueViewingReminders(windowKind) {
+  // Fixed switch (never user input) → safe to interpolate into the SQL.
+  const col = windowKind === '2h' ? 'reminder_2h_sent_at' : 'reminder_24h_sent_at'
+  const bounds = windowKind === '2h'
+    ? "v.scheduled_for > NOW() AND v.scheduled_for <= NOW() + interval '2 hours'"
+    : "v.scheduled_for > NOW() + interval '2 hours' AND v.scheduled_for <= NOW() + interval '24 hours'"
+  const { rows } = await query(
+    `WITH due AS (
+       UPDATE viewings v
+          SET ${col} = NOW(), updated_at = NOW()
+        WHERE v.status IN ('requested', 'confirmed')
+          AND v.${col} IS NULL
+          AND v.tenant_line_user_id <> ''
+          AND ${bounds}
+        RETURNING v.id, v.room_id, v.tenant_line_user_id, v.scheduled_for
+     )
+     SELECT d.id, d.room_id, d.tenant_line_user_id, d.scheduled_for, r.title AS room_title
+       FROM due d
+       JOIN rooms r ON r.id = d.room_id`,
+  )
+  return rows
+}
+
+/**
  * Public read of confirmed + future viewings for a single room. Used by the
  * RoomDetail page's <AvailableViewingDates> so anyone (signed in or not)
  * browsing the room can see the dates admin has set.
