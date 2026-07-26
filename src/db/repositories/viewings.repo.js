@@ -40,6 +40,23 @@ export async function createForTenant({ roomId, tenantId, tenantLineUserId, sche
   return findById(rows[0].id)
 }
 
+/**
+ * Admin books a viewing directly for a tenant (e.g. the tenant asked admin over
+ * the phone/Line to set it up). Defaults to status='confirmed' — admin is
+ * arranging it on the tenant's behalf, not requesting it — and backfills the
+ * cached tenant_line_user_id from the tenants row so reminders + confirmations
+ * can push without an extra lookup.
+ */
+export async function createForAdmin({ roomId, tenantId, scheduledFor, note, status = 'confirmed' }) {
+  const { rows } = await query(
+    `INSERT INTO viewings (room_id, tenant_id, tenant_line_user_id, scheduled_for, note, status)
+     VALUES ($1, $2, COALESCE((SELECT line_id FROM tenants WHERE id = $2), ''), $3, $4, $5)
+     RETURNING id`,
+    [roomId, tenantId, scheduledFor, note ?? null, status],
+  )
+  return findById(rows[0].id)
+}
+
 /** Legacy alias kept for any older callers. */
 export async function createRequest({ roomId, tenantId, scheduledFor, note }) {
   const { rows } = await query(
@@ -141,11 +158,14 @@ export async function countUpcomingForLandlord(landlordId) {
  * it safe under restarts and multiple app instances — each viewing is claimed by
  * exactly one caller, so no reminder is sent twice.
  *
- * Windows (both exclude declined/cancelled/completed and tenants with no LINE id):
+ * Only CONFIRMED viewings are reminded — a tenant doesn't have a locked-in
+ * appointment until admin confirms, so we never remind a still-'requested' (or
+ * declined/cancelled/completed) one. Tenants with no LINE id are skipped.
+ * Windows:
  *   '24h' → scheduled 2h..24h from now  (the "you have a viewing" heads-up)
  *   '2h'  → scheduled 0..2h  from now    (the "it's almost time" nudge)
- * The 24h window stops at 2h so a viewing booked <2h out only gets the 2h nudge,
- * never both at once.
+ * The 24h window stops at 2h so a viewing confirmed <2h out only gets the 2h
+ * nudge, never both at once.
  *
  * @param {'24h'|'2h'} windowKind
  * @returns {Promise<Array<{id:number, room_id:number, tenant_line_user_id:string, scheduled_for:string, room_title:string}>>}
@@ -160,7 +180,7 @@ export async function claimDueViewingReminders(windowKind) {
     `WITH due AS (
        UPDATE viewings v
           SET ${col} = NOW(), updated_at = NOW()
-        WHERE v.status IN ('requested', 'confirmed')
+        WHERE v.status = 'confirmed'
           AND v.${col} IS NULL
           AND v.tenant_line_user_id <> ''
           AND ${bounds}

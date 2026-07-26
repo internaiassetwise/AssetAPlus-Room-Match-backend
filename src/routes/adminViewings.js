@@ -8,6 +8,8 @@
 //             tenant is pushed a "please pick another time" message
 //
 //   GET   /api/admin/viewings             (admin) → list (?status=requested|confirmed|…|all)
+//   POST  /api/admin/viewings             (admin) → book an appointment for a
+//                                                    tenant directly (confirmed)
 //   POST  /api/admin/viewings/:id/confirm (admin)
 //   POST  /api/admin/viewings/:id/decline (admin)  — reject a pending request
 //   POST  /api/admin/viewings/:id/cancel  (admin)  — cancel a booking the tenant
@@ -75,6 +77,31 @@ adminViewings.get('/', requireAdmin, asyncHandler(async (req, res) => {
   const status = q === 'all' ? null : q
   const rows = await viewings.findForAdmin({ status })
   res.json(rows.map(mapRow))
+}))
+
+// POST / — admin books an appointment directly for a tenant who asked them to
+// arrange it. Created as 'confirmed' and the tenant is pushed a LINE confirmation.
+const createBody = z.object({
+  tenantId:     z.coerce.number().int().positive(),
+  roomId:       z.coerce.number().int().positive(),
+  scheduledFor: z.string().refine((v) => !Number.isNaN(Date.parse(v)), { message: 'รูปแบบวันเวลาไม่ถูกต้อง' }),
+  note:         z.string().trim().max(500).optional().or(z.literal('')),
+})
+
+adminViewings.post('/', requireAdmin, validate({ body: createBody }), asyncHandler(async (req, res) => {
+  const v = await viewings.createForAdmin({
+    tenantId:     req.body.tenantId,
+    roomId:       req.body.roomId,
+    scheduledFor: req.body.scheduledFor,
+    note:         req.body.note || null,
+    status:       'confirmed',
+  })
+  if (!v) throw new AppError(400, 'VIEWING_CREATE_FAILED', 'สร้างนัดชมไม่สำเร็จ')
+  const adminTag = `@${req.admin?.displayName || req.admin?.username || 'แอดมิน'}`
+  pushToTenant(v, `✅ แอดมินนัดชมห้อง "${v.room_title}" ให้คุณแล้วค่ะ เจอกัน ${bangkok(v.scheduled_for)} นะคะ`)
+  notifyAdminGroup(`🗓 [แอดมินสร้างนัดชม]\n"${v.room_title}" — ${bangkok(v.scheduled_for)}\nสร้างโดย: ${adminTag}`)
+  logger.info({ viewingId: v.id, admin: req.admin?.displayName || req.admin?.username }, 'viewing created by admin')
+  res.status(201).json(mapRow(v))
 }))
 
 adminViewings.post('/:id/confirm', requireAdmin, validate({ params: idParam }),
