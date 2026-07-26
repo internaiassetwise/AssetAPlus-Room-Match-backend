@@ -15,11 +15,21 @@ const COLS = `id, line_user_id, reason, summary, original_payload, status,
               admin_reply, replied_at, resolved_at, thread,
               created_at, updated_at`
 
+// Resolve the user's display name from their Line id — a bot user is a tenant
+// and/or a landlord, both keyed by line_id. Correlated subqueries (not JOINs) so
+// one admin_queue row never fans out even if a line_id maps to >1 row. The name
+// is the LINE displayName the bot backfills on first contact (refreshFromLine).
+const NAME_EXPR = `COALESCE(
+  NULLIF(TRIM((SELECT full_name FROM tenants   WHERE line_id = q.line_user_id ORDER BY id LIMIT 1)), ''),
+  NULLIF(TRIM((SELECT full_name FROM landlords WHERE line_id = q.line_user_id ORDER BY id LIMIT 1)), '')
+) AS user_name`
+
 function shape(row) {
   if (!row) return null
   return {
     id:              row.id,
     lineUserId:      row.line_user_id,
+    userName:        row.user_name ?? null,
     reason:          row.reason,
     summary:         row.summary,
     originalPayload: row.original_payload,
@@ -71,7 +81,9 @@ export async function findOpen({ reason, limit = 100 } = {}) {
 }
 
 export async function findById(id) {
-  const { rows } = await query(`SELECT ${COLS} FROM admin_queue WHERE id = $1`, [id])
+  const { rows } = await query(
+    `SELECT ${COLS}, ${NAME_EXPR} FROM admin_queue q WHERE id = $1`, [id],
+  )
   return shape(rows[0])
 }
 
@@ -128,7 +140,7 @@ export async function reopen(id) {
 /** Paged inbox list, newest first. Optional status / reason filter. */
 export async function list({ status, reason, limit = 100, offset = 0 } = {}) {
   const { rows } = await query(
-    `SELECT ${COLS} FROM admin_queue
+    `SELECT ${COLS}, ${NAME_EXPR} FROM admin_queue q
       WHERE ($1::text IS NULL OR status = $1)
         AND ($2::text IS NULL OR reason  = $2)
       ORDER BY created_at DESC
