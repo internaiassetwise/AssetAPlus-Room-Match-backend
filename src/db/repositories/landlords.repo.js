@@ -98,6 +98,13 @@ export async function update(id, fields) {
   return findById(id)
 }
 
+/** Hard-delete a landlord. Callers must ensure the landlord owns no rooms first
+ *  (rooms FK is ON DELETE CASCADE — deleting would take the rooms with it). */
+export async function remove(id) {
+  const { rowCount } = await query('DELETE FROM landlords WHERE id = $1', [id])
+  return rowCount > 0
+}
+
 function rowToLandlord(row) {
   return {
     id: row.id,

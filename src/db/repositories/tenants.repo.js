@@ -116,6 +116,13 @@ export async function createFromBot(lineUserId) {
   return rows[0]
 }
 
+/** Hard-delete a tenant. FK cascades take their matches / viewings / sessions
+ *  (all tenant-owned records), so this fully removes the account. */
+export async function remove(id) {
+  const { rowCount } = await pool.query('DELETE FROM tenants WHERE id = $1', [id])
+  return rowCount > 0
+}
+
 /**
  * Capture the Line display name + profile picture on webapp login.
  *

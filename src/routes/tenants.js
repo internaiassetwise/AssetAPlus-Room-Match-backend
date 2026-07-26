@@ -9,6 +9,7 @@ import * as repo from '../db/repositories/tenants.repo.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate }     from '../middleware/validate.js'
 import { requireAdmin } from '../middleware/requireAdmin.js'
+import { AppError }     from '../middleware/AppError.js'
 
 export const tenants = Router()
 
@@ -36,3 +37,11 @@ tenants.patch('/:id', validate({ params: idParam, body: patchBody }),
     res.json(rows[0])
   }),
 )
+
+// Hard-delete a tenant account. FK cascades remove their matches / viewings /
+// sessions (all tenant-owned). Irreversible — the client confirms first.
+tenants.delete('/:id', validate({ params: idParam }), asyncHandler(async (req, res) => {
+  const ok = await repo.remove(req.params.id)
+  if (!ok) throw new AppError(404, 'TENANT_NOT_FOUND', 'ไม่พบผู้เช่านี้')
+  res.status(204).end()
+}))

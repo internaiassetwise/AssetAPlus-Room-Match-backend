@@ -73,3 +73,18 @@ landlords.patch('/:id', validate({ params: idParam, body: patchBody }), asyncHan
   if (!updated) throw new AppError(404, 'LANDLORD_NOT_FOUND', 'ไม่พบเจ้าของห้องนี้')
   res.json(updated)
 }))
+
+landlords.delete('/:id', validate({ params: idParam }), asyncHandler(async (req, res) => {
+  const l = await repo.findById(req.params.id)
+  if (!l) throw new AppError(404, 'LANDLORD_NOT_FOUND', 'ไม่พบเจ้าของห้องนี้')
+  // Refuse if the landlord still owns rooms — the rooms FK is ON DELETE CASCADE,
+  // so deleting would silently take the rooms too. Admin must move/remove the
+  // rooms first (this is the safe path for cleaning up a mistaken/duplicate row,
+  // which has no rooms).
+  if ((l.roomCount ?? 0) > 0) {
+    throw new AppError(409, 'LANDLORD_HAS_ROOMS',
+      `ลบไม่ได้ — เจ้าของห้องนี้มี ${l.roomCount} ห้องอยู่ กรุณาย้าย/ลบห้องก่อน`)
+  }
+  await repo.remove(req.params.id)
+  res.status(204).end()
+}))
