@@ -24,6 +24,7 @@ import * as oidc from 'openid-client'
 import * as admins           from '../db/repositories/admins.repo.js'
 import * as tenants          from '../db/repositories/tenants.repo.js'
 import * as landlords        from '../db/repositories/landlords.repo.js'
+import * as landlordClaims   from '../db/repositories/landlordClaims.repo.js'
 import * as userSessions     from '../db/repositories/userSessions.repo.js'
 import * as landlordSessions from '../db/repositories/landlordSessions.repo.js'
 import { asyncHandler }        from '../middleware/_asyncHandler.js'
@@ -245,11 +246,22 @@ auth.get('/line/start', asyncHandler(async (req, res) => {
   const role     = req.query.role === 'landlord' ? 'landlord' : 'tenant'
   const returnTo = sanitizeReturn(req.query.return)
 
+  // Optional landlord claim link (?claim=<raw>). Validate the token BEFORE
+  // bouncing to LINE so a dead/expired link fails fast, and carry only the claim
+  // ROW ID in the signed state — the raw token is a bearer secret and `state` is
+  // echoed into LINE's logs + the user's history, so it must never go in there.
+  let cid
+  if (req.query.claim) {
+    const claim = await landlordClaims.findRedeemableByToken(String(req.query.claim))
+    if (!claim) return res.redirect(frontendUrl('/login?claim_error=1'))
+    cid = claim.id
+  }
+
   // Carry role + return path + issued-at inside a SIGNED token passed as Line's
   // `state`, which Line echoes back unchanged. HMAC verification in the callback
   // proves the value is ours — no cookie round-trip, so this survives iOS
   // Safari's ITP (which drops the SameSite=Lax state cookie set mid-redirect).
-  const state = signState({ r: role, rt: returnTo, iat: Date.now() })
+  const state = signState({ r: role, rt: returnTo, iat: Date.now(), ...(cid ? { cid } : {}) })
 
   const authUrl = new URL(LINE_AUTHORIZE_URL)
   authUrl.searchParams.set('response_type', 'code')
@@ -316,6 +328,23 @@ auth.get('/line/callback', asyncHandler(async (req, res) => {
   // role to CREATE if the user doesn't have it yet — so a tenant can swap to
   // landlord (and vice versa) by picking the other role on the login page.
   const role = payload.r || 'tenant'
+
+  // Landlord claim redemption — bind this LINE identity to the exact landlord row
+  // the admin created (merging away any bot stub), BEFORE the findByLineId lookup
+  // below so the landlord session is created for the now-bound row. Best-effort:
+  // a bind failure must not break login; the user just isn't linked yet.
+  if (payload.cid) {
+    const claim = await landlordClaims.findRedeemableById(payload.cid)
+    if (claim) {
+      try {
+        await landlords.bindLineIdWithMerge(claim.landlordId, lineUserId)
+        await landlordClaims.markRedeemed(claim.id, lineUserId)
+        logger.info({ lineUserId, landlordId: claim.landlordId, claimId: claim.id }, 'landlord claim redeemed')
+      } catch (err) {
+        logger.error({ err, lineUserId, claimId: claim.id }, 'landlord claim bind failed')
+      }
+    }
+  }
 
   let tenant   = await tenants.findByLineId(lineUserId)
   let landlord = await landlords.findByLineId(lineUserId)

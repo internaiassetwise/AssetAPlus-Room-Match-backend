@@ -2,10 +2,22 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import * as repo from '../db/repositories/landlords.repo.js'
+import * as claims from '../db/repositories/landlordClaims.repo.js'
+import { config } from '../config.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate } from '../middleware/validate.js'
 import { AppError } from '../middleware/AppError.js'
 import { requireAdmin } from '../middleware/requireAdmin.js'
+
+// Build the landlord-facing claim URL. It must hit the BACKEND's /auth/line/start
+// (which redirects to LINE) — derive that base from the registered LINE redirect
+// URI so it's always the right origin + path prefix as the working callback.
+function claimStartUrl(rawToken) {
+  const base = config.LINE_LOGIN_REDIRECT_URI
+    ? config.LINE_LOGIN_REDIRECT_URI.replace(/\/line\/callback\/?$/, '/line/start')
+    : `${(config.APP_BASE_URL || '').replace(/\/+$/, '')}/api/auth/line/start`
+  return `${base}?role=landlord&claim=${encodeURIComponent(rawToken)}`
+}
 
 export const landlords = Router()
 
@@ -72,6 +84,21 @@ landlords.patch('/:id', validate({ params: idParam, body: patchBody }), asyncHan
   const updated = await repo.update(req.params.id, req.body)
   if (!updated) throw new AppError(404, 'LANDLORD_NOT_FOUND', 'ไม่พบเจ้าของห้องนี้')
   res.json(updated)
+}))
+
+// Generate a one-time claim link so the landlord can bind their LINE account to
+// this row. Refuses if the landlord is already linked, unless ?force=true (the
+// owner switched LINE accounts).
+landlords.post('/:id/claim-link', validate({ params: idParam }), asyncHandler(async (req, res) => {
+  const l = await repo.findById(req.params.id)
+  if (!l) throw new AppError(404, 'LANDLORD_NOT_FOUND', 'ไม่พบเจ้าของห้องนี้')
+  const force = req.query.force === 'true' || req.query.force === '1'
+  if (l.lineId && !force) {
+    throw new AppError(409, 'LANDLORD_ALREADY_LINKED',
+      'เจ้าของห้องนี้เชื่อมกับ LINE อยู่แล้ว (ใช้ ?force=true เพื่อออกลิงก์ใหม่)')
+  }
+  const { rawToken, claim } = await claims.create(l.id, req.admin?.id ?? null, 14)
+  res.status(201).json({ url: claimStartUrl(rawToken), expiresAt: claim.expiresAt })
 }))
 
 landlords.delete('/:id', validate({ params: idParam }), asyncHandler(async (req, res) => {

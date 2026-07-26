@@ -1,5 +1,5 @@
 // src/db/repositories/landlords.repo.js — Landlord CRUD + counts.
-import { query } from '../pool.js'
+import { query, pool } from '../pool.js'
 
 const SELECT_LANDLORD = `
   SELECT
@@ -103,6 +103,42 @@ export async function update(id, fields) {
 export async function remove(id) {
   const { rowCount } = await query('DELETE FROM landlords WHERE id = $1', [id])
   return rowCount > 0
+}
+
+/**
+ * Bind a landlord row to a LINE identity when a claim link is redeemed, merging
+ * away any OTHER landlord that already held that line_id (typically a bot stub
+ * created when the owner messaged the bot before claiming). In one transaction:
+ * move the stub's rooms/preferences to the target, release the stub's line_id +
+ * deactivate it, then set line_id on the target. Idempotent if the target is the
+ * one that already held the identity. Returns the target (via findById).
+ */
+export async function bindLineIdWithMerge(targetId, lineUserId) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const { rows: dupes } = await client.query(
+      'SELECT id FROM landlords WHERE line_id = $1 AND id <> $2', [lineUserId, targetId],
+    )
+    for (const d of dupes) {
+      await client.query('UPDATE rooms SET landlord_id = $1 WHERE landlord_id = $2', [targetId, d.id])
+      await client.query('UPDATE preferences SET landlord_id = $1 WHERE landlord_id = $2', [targetId, d.id])
+      await client.query(
+        'UPDATE landlords SET line_id = NULL, is_active = FALSE, updated_at = NOW() WHERE id = $1', [d.id],
+      )
+    }
+    await client.query(
+      'UPDATE landlords SET line_id = $2, is_active = TRUE, updated_at = NOW() WHERE id = $1',
+      [targetId, lineUserId],
+    )
+    await client.query('COMMIT')
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw err
+  } finally {
+    client.release()
+  }
+  return findById(targetId)
 }
 
 function rowToLandlord(row) {
