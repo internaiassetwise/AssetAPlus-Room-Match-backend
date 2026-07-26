@@ -110,10 +110,27 @@ export async function runOnce(lineUserId, text) {
   // Strip it deterministically — the model keeps slipping `**` back in despite
   // the prompt rule. Also keeps history clean so the model stops seeing its own
   // markdown on later turns.
-  const reply = rawReply ? stripMarkdown(rawReply) : rawReply
-  if (reply) await store.append(lineUserId, 'assistant', reply)
-  else logger.warn({ lineUserId, inLen: trimmed.length }, 'agent loop returned no reply')
-  return { reply, pushes, status: reply ? 'ok' : 'no_reply' }
+  const reply = rawReply ? stripMarkdown(rawReply) : null
+
+  if (reply) {
+    await store.append(lineUserId, 'assistant', reply)
+    return { reply, pushes, status: 'ok' }
+  }
+
+  // The agent loop produced NO text (Gemini transport error / empty turn / round
+  // cap). We already appended the user turn above — so if we store nothing here,
+  // that user turn is left DANGLING, and the user's NEXT message gets appended as
+  // a second consecutive user turn. buildContents then feeds Gemini two user
+  // turns in a row with no assistant between, and the model answers BOTH at once
+  // (the reported "ตอบผิดคำถาม / ทั้งสองห้อง" bug). Persist the exact fallback the
+  // user will see as the assistant turn so history stays strictly user↔assistant
+  // alternating and each question is answered on its own.
+  const fallback = pushes.length
+    ? 'เสร็จเรียบร้อยค่ะ แต่น้องห้องตอบข้อความไม่ได้ชั่วคราว หากมีปัญหาแจ้งได้นะคะ'
+    : 'ขออภัยค่ะ ระบบตอบกลับไม่ได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง'
+  logger.warn({ lineUserId, inLen: trimmed.length, pushes: pushes.length }, 'agent loop returned no reply — stored fallback turn')
+  await store.append(lineUserId, 'assistant', fallback)
+  return { reply: fallback, pushes, status: 'ok', fallback: true }
 }
 
 /**
@@ -176,7 +193,12 @@ export async function handle(lineUserId, text, replyToken = null) {
     r = await runOnce(lineUserId, text)
   } catch (err) {
     logger.error({ err, lineUserId }, 'chat agent handle failed')
-    await line.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งค่ะ')
+    const msg = 'ขออภัยค่ะ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งค่ะ'
+    // runOnce appends the user turn before it can throw. Record an assistant turn
+    // so history stays alternating — otherwise the next message dangles against
+    // this one (same root cause as the fallback inside runOnce). Best-effort.
+    try { await store.append(lineUserId, 'assistant', msg) } catch { /* ignore */ }
+    await line.replyOrPush(lineUserId, replyToken, msg)
     return null
   }
 
