@@ -105,13 +105,19 @@ export async function handler(args, ctx) {
   }
 
   try {
-    // Capture the user's verbatim message (if provided) inside originalPayload
-    // so the admin has full context alongside the model's summary.
+    // Capture the user's verbatim message inside originalPayload so the admin
+    // sees what was actually asked. The model frequently omits originalMessage
+    // (it's optional), which used to leave the inbox showing {"message": null} —
+    // so fall back to the user's real last message from the turn context.
+    const userMessage =
+      (typeof originalMessage === 'string' && originalMessage.trim())
+        ? originalMessage.trim()
+        : (ctx.lastUserText || null)
     const ticket = await alertAdmins({
       lineUserId:      ctx.lineUserId,
       reason,
       summary:         summary.trim(),
-      originalPayload: { message: originalMessage ?? null },
+      originalPayload: { message: userMessage },
     })
     // (alertAdmins also pushes to the admin Line group if configured)
 

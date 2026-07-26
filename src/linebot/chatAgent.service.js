@@ -240,11 +240,13 @@ export async function handle(lineUserId, text, replyToken = null) {
  * @returns {Promise<{reply:string|null, pushes:object[]}>}
  */
 async function runAgentLoop({ lineUserId, history }) {
-  const ctx = { lineUserId, logger }
+  const lastUserText = history.length ? history[history.length - 1].content : ''
+  // lastUserText is passed to tools so escalations can record the user's actual
+  // message even when the model omits it from the tool args (escalateToAdmin).
+  const ctx = { lineUserId, logger, lastUserText }
   let contents = buildContents(history)
   const pushes = []
   let retriedEmpty = false
-  const lastUserText = history.length ? history[history.length - 1].content : ''
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     // Round 0: if the user is clearly asking to browse rooms, FORCE searchRooms
