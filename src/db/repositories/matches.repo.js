@@ -12,7 +12,7 @@ const SELECT_MATCH = `
   SELECT
     m.id, m.tenant_id, m.room_id, m.status, m.match_score, m.agent_note,
     m.created_at, m.updated_at,
-    t.full_name AS tenant_name, t.phone AS tenant_phone,
+    t.full_name AS tenant_name, t.phone AS tenant_phone, t.line_id AS tenant_line_id,
     r.title AS room_title, r.monthly_rent AS room_rent,
     r.bedrooms AS room_bedrooms, r.property_type AS room_type,
     z.name_th AS zone_name, z.slug AS zone_slug
@@ -33,6 +33,20 @@ export async function list({ status, tenantId, roomId, limit = 50 } = {}) {
     [status ?? null, tenantId ?? null, roomId ?? null, Math.min(limit, 200)],
   )
   return rows.map(rowToMatch)
+}
+
+export async function findById(id) {
+  const { rows } = await query(`${SELECT_MATCH} WHERE m.id = $1`, [id])
+  return rows[0] ? rowToMatch(rows[0]) : null
+}
+
+/** Hard-delete a match row (used to undo an admin mistake). */
+export async function remove(id) {
+  const { rows } = await query(
+    `DELETE FROM matches WHERE id = $1 RETURNING id`,
+    [id],
+  )
+  return rows.length > 0
 }
 
 export async function create({ tenantId, roomId, status = 'suggested', matchScore = null, agentNote = null }) {
@@ -201,6 +215,7 @@ function rowToMatch(row) {
     updatedAt:   row.updated_at,
     tenantName:  row.tenant_name,
     tenantPhone: row.tenant_phone,
+    tenantLineId:row.tenant_line_id,
     roomTitle:   row.room_title,
     roomRent:    row.room_rent,
     roomBedrooms:row.room_bedrooms,
