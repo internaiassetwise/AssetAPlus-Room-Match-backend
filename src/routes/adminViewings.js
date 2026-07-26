@@ -7,9 +7,11 @@
 //   decline → status='declined', the slot reopens for someone else, and the
 //             tenant is pushed a "please pick another time" message
 //
-//   GET   /api/admin/viewings             (admin) → list (default status=requested)
+//   GET   /api/admin/viewings             (admin) → list (?status=requested|confirmed|…|all)
 //   POST  /api/admin/viewings/:id/confirm (admin)
-//   POST  /api/admin/viewings/:id/decline (admin)
+//   POST  /api/admin/viewings/:id/decline (admin)  — reject a pending request
+//   POST  /api/admin/viewings/:id/cancel  (admin)  — cancel a booking the tenant
+//                                                    can no longer make
 //
 // (The older landlord confirm/decline path lives on PATCH /api/viewings/:id.
 // In the middleman model the ADMIN is the one who confirms tenant bookings, so
@@ -101,7 +103,21 @@ adminViewings.post('/:id/decline', requireAdmin, validate({ params: idParam }),
   }),
 )
 
-/** Best-effort Line push to the tenant; never fails a confirm/decline. */
+adminViewings.post('/:id/cancel', requireAdmin, validate({ params: idParam }),
+  asyncHandler(async (req, res) => {
+    const v = await viewings.updateStatus(req.params.id, { status: 'cancelled' })
+    if (!v) throw new AppError(404, 'VIEWING_NOT_FOUND', 'ไม่พบรายการนัดชมนี้')
+    const adminTag = `@${req.admin?.displayName || req.admin?.username || 'แอดมิน'}`
+    // Free the slot so it can be re-booked (safe no-op if there was none).
+    await viewingSlots.reopenByViewing(req.params.id)
+    pushToTenant(v, `แจ้งยกเลิกนัดชมห้อง "${v.room_title}" (${bangkok(v.scheduled_for)}) ค่ะ 🙏 หากต้องการนัดใหม่ ทักหาแอดมินได้เลยนะคะ`)
+    notifyAdminGroup(`🚫 [ยกเลิกนัดชม]\n"${v.room_title}" — ${bangkok(v.scheduled_for)}\nยกเลิกโดย: ${adminTag}`)
+    logger.info({ viewingId: v.id, admin: req.admin?.displayName || req.admin?.username }, 'viewing cancelled by admin')
+    res.json(mapRow(v))
+  }),
+)
+
+/** Best-effort Line push to the tenant; never fails a confirm/decline/cancel. */
 function pushToTenant(v, text) {
   const lineUserId = v?.tenant_line_user_id || v?.tenant_line_id
   if (!lineUserId || !lineMessaging.isConfigured()) return

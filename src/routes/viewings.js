@@ -5,7 +5,8 @@
 //                                  the slot on the tenant's behalf.
 //   GET  /api/viewings?role=tenant  — tenant's own viewings
 //   GET  /api/viewings?role=landlord — landlord's incoming requests
-//   PATCH /api/viewings/:id        — landlord confirm/decline, tenant cancel
+//   PATCH /api/viewings/:id        — landlord confirm/decline (tenant self-cancel
+//                                    is disabled → 403 CONTACT_ADMIN)
 //
 // Under the middleman workflow, dates are set by admin (e.g. via the Line
 // chatbot) and tenants contact admin to request a slot. The endpoint stays
@@ -136,7 +137,9 @@ viewings.get('/', asyncHandler(async (req, res) => {
 /**
  * Update viewing status.
  *   - landlord: status ∈ {confirmed, declined, completed} (+ landlord_note)
- *   - tenant:   status ∈ {cancelled}
+ *   - tenant:   status = cancelled → 403 CONTACT_ADMIN (self-cancel disabled;
+ *               admin cancels via POST /admin/viewings/:id/cancel). Tenants may
+ *               still edit their own `note` before confirmation.
  */
 viewings.patch('/:id', validate({ params: idParam, body: patchBody }),
   asyncHandler(async (req, res) => {
@@ -171,12 +174,12 @@ viewings.patch('/:id', validate({ params: idParam, body: patchBody }),
       return res.json(updated)
     }
     if (wantsTenantAction) {
+      // Tenants no longer self-cancel. Under the middleman model cancellations go
+      // through admin (mirrors how tenants can't self-book) — the tenant contacts
+      // admin via Line. requireUser first so a logged-in tenant gets this clear
+      // 403 instead of a 401, and the admin cancel path is POST /admin/viewings/:id/cancel.
       await runMiddleware(requireUser, req, res)
-      if (item.tenant_id !== req.user.id) {
-        throw new AppError(403, 'NOT_OWNER', 'คุณไม่ใช่เจ้าของรายการนี้')
-      }
-      const updated = await repo.updateStatus(req.params.id, { status: 'cancelled' })
-      return res.json(updated)
+      throw new AppError(403, 'CONTACT_ADMIN', 'การยกเลิกนัดชมต้องติดต่อแอดมินทาง Line ค่ะ')
     }
     // Otherwise allow a tenant to edit their own note before confirmation.
     await runMiddleware(requireUser, req, res)
