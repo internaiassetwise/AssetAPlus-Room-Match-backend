@@ -46,6 +46,17 @@ function bangkok(iso) {
   }
 }
 
+// Sales hours: Monday–Saturday, 09:00–18:00 Bangkok time. A viewing may START
+// from 09:00 up to (but not including) 18:00. Evaluated in ICT so it's correct
+// regardless of the server's own timezone.
+function withinSalesHours(iso) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return false
+  const dow  = d.toLocaleString('en-US', { timeZone: 'Asia/Bangkok', weekday: 'short' })
+  const hour = Number(d.toLocaleString('en-US', { timeZone: 'Asia/Bangkok', hour: '2-digit', hour12: false }))
+  return dow !== 'Sun' && hour >= 9 && hour < 18
+}
+
 // Shape a viewing row (SELECT_BASE) for the admin list. Admin may see tenant
 // contact (they need it to arrange the viewing), but we map an explicit
 // whitelist rather than dumping the raw joined row.
@@ -81,22 +92,51 @@ adminViewings.get('/', requireAdmin, asyncHandler(async (req, res) => {
 
 // POST / — admin books an appointment directly for a tenant who asked them to
 // arrange it. Created as 'confirmed' and the tenant is pushed a LINE confirmation.
+// Time comes from EITHER a clicked open slot (slotId — preferred, and booked
+// atomically so a tenant can't grab it via the bot at the same moment) OR a
+// free-typed scheduledFor (for rooms that have no open slots).
 const createBody = z.object({
   tenantId:     z.coerce.number().int().positive(),
   roomId:       z.coerce.number().int().positive(),
-  scheduledFor: z.string().refine((v) => !Number.isNaN(Date.parse(v)), { message: 'รูปแบบวันเวลาไม่ถูกต้อง' }),
+  slotId:       z.coerce.number().int().positive().optional(),
+  scheduledFor: z.string().refine((v) => !Number.isNaN(Date.parse(v)), { message: 'รูปแบบวันเวลาไม่ถูกต้อง' }).optional(),
   note:         z.string().trim().max(500).optional().or(z.literal('')),
+}).refine((b) => b.slotId != null || b.scheduledFor != null, {
+  message: 'ต้องเลือกช่วงเวลา หรือระบุวันเวลาเอง',
 })
 
 adminViewings.post('/', requireAdmin, validate({ body: createBody }), asyncHandler(async (req, res) => {
-  const v = await viewings.createForAdmin({
-    tenantId:     req.body.tenantId,
-    roomId:       req.body.roomId,
-    scheduledFor: req.body.scheduledFor,
-    note:         req.body.note || null,
-    status:       'confirmed',
-  })
+  const { tenantId, roomId, slotId } = req.body
+  const note = req.body.note || null
+
+  // A clicked slot must still be open, belong to this room, and be in the future.
+  let scheduledFor = req.body.scheduledFor
+  let slot = null
+  if (slotId != null) {
+    slot = await viewingSlots.findById(slotId)
+    if (!slot || slot.status !== 'open' || slot.roomId !== roomId || new Date(slot.startsAt).getTime() < Date.now()) {
+      throw new AppError(409, 'SLOT_UNAVAILABLE', 'ช่วงเวลานี้จองไม่ได้แล้ว รบกวนเลือกช่วงอื่นนะคะ')
+    }
+    scheduledFor = slot.startsAt
+  } else if (!withinSalesHours(scheduledFor)) {
+    // Free-typed time must fall inside sales hours (Mon–Sat 09:00–18:00 ICT).
+    // Slot times skip this — admin created them, they're already within hours.
+    throw new AppError(400, 'OUTSIDE_HOURS', 'นัดชมได้เฉพาะเวลาทำการ จันทร์-เสาร์ 9:00-18:00 น.')
+  }
+
+  const v = await viewings.createForAdmin({ tenantId, roomId, scheduledFor, note, status: 'confirmed' })
   if (!v) throw new AppError(400, 'VIEWING_CREATE_FAILED', 'สร้างนัดชมไม่สำเร็จ')
+
+  // Claim the slot atomically; if it was booked between our check and here, void
+  // the viewing we just made and ask the admin to pick another time.
+  if (slot) {
+    const booked = await viewingSlots.markBooked(slot.id, v.id)
+    if (!booked) {
+      await viewings.updateStatus(v.id, { status: 'cancelled' }).catch(() => {})
+      throw new AppError(409, 'SLOT_TAKEN', 'ช่วงเวลานี้เพิ่งถูกจองไป รบกวนเลือกช่วงอื่นนะคะ')
+    }
+  }
+
   const adminTag = `@${req.admin?.displayName || req.admin?.username || 'แอดมิน'}`
   pushToTenant(v, `✅ แอดมินนัดชมห้อง "${v.room_title}" ให้คุณแล้วค่ะ เจอกัน ${bangkok(v.scheduled_for)} นะคะ`)
   notifyAdminGroup(`🗓 [แอดมินสร้างนัดชม]\n"${v.room_title}" — ${bangkok(v.scheduled_for)}\nสร้างโดย: ${adminTag}`)
