@@ -1,6 +1,7 @@
 // src/config.js — Validated environment configuration
 // Fail fast at boot if anything is missing or invalid.
 import { z } from 'zod'
+import path from 'node:path'
 
 const schema = z.object({
   NODE_ENV:           z.enum(['development', 'test', 'production']).default('development'),
@@ -89,6 +90,13 @@ const schema = z.object({
   // URL (e.g. https://room-match-web.up.railway.app) so a phone tap opens a real
   // page; if neither is set the button falls back to an in-chat message.
   WEB_BASE_URL: z.string().url().optional(),
+
+  // Directory where uploaded room photos are written + served from (/uploads).
+  // Railway's container filesystem is EPHEMERAL — it's wiped on every redeploy,
+  // so uploads vanish and their URLs 404. Attach a Railway Volume and point this
+  // at its mount path (e.g. /app/uploads or /data) so photos persist. Defaults to
+  // <cwd>/uploads for local dev.
+  UPLOADS_DIR: z.string().optional(),
 }).refine(
   // Production must never ship with a wildcard CORS origin. `*` + `credentials:
   // true` + SameSite=None cookies lets any site make credentialed requests as
@@ -108,6 +116,10 @@ if (!parsed.success) {
 }
 
 export const config = parsed.data
+
+// Resolved uploads directory (absolute). Point UPLOADS_DIR at a persistent
+// Railway Volume mount in prod; falls back to <cwd>/uploads for local dev.
+export const UPLOADS_DIR = config.UPLOADS_DIR || path.join(process.cwd(), 'uploads')
 
 // Derived helpers
 export const isProd = config.NODE_ENV === 'production'

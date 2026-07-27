@@ -12,6 +12,7 @@ import { validate } from '../middleware/validate.js'
 import { AppError } from '../middleware/AppError.js'
 import { requireAdmin } from '../middleware/requireAdmin.js'
 import { logger } from '../logger.js'
+import { UPLOADS_DIR } from '../config.js'
 import * as lineMessaging from '../linebot/lineMessaging.service.js'
 
 export const rooms = Router()
@@ -189,7 +190,7 @@ rooms.post('/:id/photos', requireAdmin, validate({ params: idParam }), photoUplo
     const crypto = await import('node:crypto')
 
     const fileName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`
-    const dir = path.join(process.cwd(), 'uploads', 'rooms', String(roomId))
+    const dir = path.join(UPLOADS_DIR, 'rooms', String(roomId))
     await fs.mkdir(dir, { recursive: true })
     await fs.writeFile(path.join(dir, fileName), optimized)
 

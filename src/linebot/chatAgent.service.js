@@ -27,7 +27,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { config } from '../config.js'
+import { config, UPLOADS_DIR } from '../config.js'
 import { logger } from '../logger.js'
 import * as store  from './conversationStore.service.js'
 import * as gemini from '../services/gemini.service.js'
@@ -381,7 +381,7 @@ export async function handleImage(lineUserId, messageId, replyToken = null) {
     const { buffer, contentType, filename } = await line.downloadImage(messageId)
     const ext = extFromNameType(filename, contentType)
     const fileName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`
-    const dir = path.join(process.cwd(), 'uploads', 'rooms', String(draft.id))
+    const dir = path.join(UPLOADS_DIR, 'rooms', String(draft.id))
     await fs.mkdir(dir, { recursive: true })
     await fs.writeFile(path.join(dir, fileName), buffer)
 

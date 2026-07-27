@@ -25,6 +25,7 @@ import { validate }     from '../middleware/validate.js'
 import { requireBot }   from '../middleware/requireBot.js'
 import { AppError }     from '../middleware/AppError.js'
 import { requireLandlord } from '../auth/middleware.js'
+import { UPLOADS_DIR }  from '../config.js'
 
 export const myListings = Router()
 
@@ -208,7 +209,7 @@ myListings.post('/:id/photos', requireBot, photoUpload.single('photo'),
     }
     const optimized = await resizeForWeb(req.file.buffer)
     const fileName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`
-    const dir = path.join(process.cwd(), 'uploads', 'rooms', String(roomId))
+    const dir = path.join(UPLOADS_DIR, 'rooms', String(roomId))
     await fs.mkdir(dir, { recursive: true })
     const fullPath = path.join(dir, fileName)
     await fs.writeFile(fullPath, optimized)

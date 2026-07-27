@@ -6,7 +6,7 @@ import cors    from 'cors'
 import compression from 'compression'
 import { randomUUID } from 'node:crypto'
 
-import { config } from './config.js'
+import { config, UPLOADS_DIR } from './config.js'
 import { apiRouter } from './routes/index.js'
 import { logger } from './logger.js'
 import { requestLogger } from './middleware/requestLogger.js'
@@ -84,7 +84,7 @@ export function createApp() {
   // Static /uploads — serves uploaded room photos. The bot (and the
   // /api/my-listings/:id/photos route) write here; the React frontend reads
   // from `${API_BASE}/uploads/...`.
-  app.use('/uploads', express.static(path.join(process.cwd(), 'uploads'), {
+  app.use('/uploads', express.static(UPLOADS_DIR, {
     maxAge: '7d',
     fallthrough: true,
   }))
