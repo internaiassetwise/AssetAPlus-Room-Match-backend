@@ -1,7 +1,8 @@
 // src/server.js — Boot sequence: load env → ping DB → bootstrap admin → listen → trap signals.
 import 'dotenv/config'
 import { createServer } from 'node:http'
-import { config }         from './config.js'
+import fs                 from 'node:fs'
+import { config, UPLOADS_DIR, PUBLIC_IMAGES_DIR } from './config.js'
 import { logger }         from './logger.js'
 import { ping, close as closePool } from './db/pool.js'
 import { ensureBootstrapAdmin } from './db/repositories/admins.repo.js'
@@ -31,6 +32,15 @@ async function main() {
   server.listen(config.PORT, () => {
     logger.info(`🚀 Room Match API on http://localhost:${config.PORT}`)
     logger.info(`   env=${config.NODE_ENV}  cors=${config.CORS_ORIGIN}`)
+    // Log where static assets resolve to (and whether they exist). A wrong path
+    // here silently 404s every room photo — on the web AND in Line Flex cards —
+    // so surfacing it at boot makes that failure obvious instead of mysterious.
+    logger.info({
+      uploadsDir:   UPLOADS_DIR,
+      uploadsExists: fs.existsSync(UPLOADS_DIR),
+      imagesDir:    PUBLIC_IMAGES_DIR,
+      imagesExists: fs.existsSync(PUBLIC_IMAGES_DIR),
+    }, 'static asset dirs')
     // Start the upcoming-viewing LINE reminder scheduler (only in the real
     // server process — never in scripts/tests that just import the repos).
     startViewingReminders()

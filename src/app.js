@@ -6,7 +6,7 @@ import cors    from 'cors'
 import compression from 'compression'
 import { randomUUID } from 'node:crypto'
 
-import { config, UPLOADS_DIR } from './config.js'
+import { config, UPLOADS_DIR, PUBLIC_IMAGES_DIR } from './config.js'
 import { apiRouter } from './routes/index.js'
 import { logger } from './logger.js'
 import { requestLogger } from './middleware/requestLogger.js'
@@ -94,7 +94,7 @@ export function createApp() {
   // relative "/images/<file>" paths; the backend serves them so Line Flex cards
   // can fetch them over the public APP_BASE_URL origin (Line requires absolute
   // https image URLs).
-  app.use('/images', express.static(path.join(process.cwd(), 'public', 'images'), {
+  app.use('/images', express.static(PUBLIC_IMAGES_DIR, {
     maxAge: '7d',
     fallthrough: true,
   }))

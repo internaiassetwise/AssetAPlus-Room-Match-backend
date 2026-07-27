@@ -2,6 +2,13 @@
 // Fail fast at boot if anything is missing or invalid.
 import { z } from 'zod'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// Absolute path to the server package root (this file lives in <root>/src).
+// Deriving paths from the MODULE location instead of process.cwd() keeps static
+// assets resolvable no matter which directory the process was started from —
+// a cwd mismatch on the host silently 404s every /images and /uploads request.
+export const SERVER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 const schema = z.object({
   NODE_ENV:           z.enum(['development', 'test', 'production']).default('development'),
@@ -118,8 +125,12 @@ if (!parsed.success) {
 export const config = parsed.data
 
 // Resolved uploads directory (absolute). Point UPLOADS_DIR at a persistent
-// Railway Volume mount in prod; falls back to <cwd>/uploads for local dev.
-export const UPLOADS_DIR = config.UPLOADS_DIR || path.join(process.cwd(), 'uploads')
+// Railway Volume mount in prod; falls back to <serverRoot>/uploads (NOT cwd —
+// see SERVER_ROOT above) for local dev.
+export const UPLOADS_DIR = config.UPLOADS_DIR || path.join(SERVER_ROOT, 'uploads')
+
+// Seeded/demo room photos shipped with the backend (git-tracked public/images).
+export const PUBLIC_IMAGES_DIR = path.join(SERVER_ROOT, 'public', 'images')
 
 // Derived helpers
 export const isProd = config.NODE_ENV === 'production'
