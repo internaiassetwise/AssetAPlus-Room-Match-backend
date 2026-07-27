@@ -32,6 +32,11 @@ ENV PORT=4000
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
 COPY src/ ./src/
+# Seeded/demo room photos served at /images. These are git-tracked and MUST be in
+# the image — room_images.url stores them as relative "/images/<file>" paths, and
+# Line Flex cards need them over https. Without this COPY every /images/... URL
+# 404s: blank hero on Line room cards and a broken gallery on the web.
+COPY public/ ./public/
 
 # uploads/ is written at runtime (room photos) — create it owned by the
 # non-root `node` user the image ships, then drop privileges.
