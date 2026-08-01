@@ -243,6 +243,39 @@ export async function downloadImage(messageId) {
 }
 
 /**
+ * Mark the user's message as read, so LINE shows "อ่านแล้ว" under it.
+ *
+ * IMPORTANT — this is the ONLY thing that produces a read receipt. Replying with
+ * a reply token does NOT do it, contrary to what the comments here used to
+ * claim: per LINE's docs, "if you send a message to the user before sending the
+ * request, the message will appear to have been sent from the official LINE
+ * account without 'Read' being displayed". So this must be called explicitly for
+ * every inbound message, ideally before we reply.
+ *
+ * The token arrives on the webhook's message object as `markAsReadToken` and,
+ * per the docs, never expires. Requires the "Chat" feature to be enabled in the
+ * LINE Official Account's Response settings — without it the API is a no-op.
+ *
+ * Best-effort: a read receipt is cosmetic, so failures are logged and swallowed
+ * rather than breaking the user's turn.
+ *
+ * @param {string} markAsReadToken
+ */
+export async function markAsRead(markAsReadToken) {
+  if (!markAsReadToken || !isConfigured()) return false
+  try {
+    await lineFetch(config.LINE_API_BASE_URL, '/chat/markAsRead', {
+      method: 'POST',
+      body: { markAsReadToken },
+    })
+    return true
+  } catch (err) {
+    logger.warn({ err: err?.message }, 'markAsRead failed (read receipt not shown)')
+    return false
+  }
+}
+
+/**
  * Show a "typing…" indicator in the user's Line chat. Useful before any
  * agent call that takes more than a second (LLM, pgvector search). The
  * indicator auto-clears after `seconds` (5–60). Single-use per request.
@@ -265,12 +298,15 @@ export { isConfigured }
  *
  * Line's reply tokens expire ~30s after the webhook fires. When the LLM takes
  * longer than that, replyMessage rejects and replyOrPush falls back to a
- * metered pushMessage — which does NOT mark the user's message as read on
- * their phone (the #1 support complaint).
+ * metered pushMessage — so a slow turn burns push quota AND leaves the user
+ * staring at a silent chat.
  *
- * This helper consumes the reply token with a brief ack BEFORE it expires
- * (marking the message as read), then hands back null when the real response
- * is ready so the caller knows to push instead of reply.
+ * This helper consumes the reply token with a brief ack BEFORE it expires, then
+ * hands back null when the real response is ready so the caller knows to push
+ * instead of reply.
+ *
+ * NOTE: this does NOT drive the "อ่านแล้ว" read receipt — replying never does.
+ * That needs an explicit markAsRead() call (see above); the two are unrelated.
  *
  * Usage:
  *   const racer = raceReplyToken(lineUserId, replyToken, { ackMessage: '…' })

@@ -82,6 +82,13 @@ async function processEvent(ev, { handle, handleImage }) {
   await appendWebhook({ lineUserId, replyToken, eventType, event: ev })
   logger.info({ lineUserId, eventType, messageType }, 'line webhook received')
 
+  // Show "อ่านแล้ว" under the user's message straight away. This is a separate
+  // LINE API from replying — sending a reply does NOT produce a read receipt —
+  // so it has to be fired explicitly, and early, while the person is still
+  // looking at the chat waiting for an answer. Fire-and-forget: it's cosmetic.
+  const markToken = ev?.message?.markAsReadToken ?? ev?.markAsReadToken
+  if (markToken) lineMessaging.markAsRead(markToken).catch(() => {})
+
   try {
     const sourceType = ev?.source?.type ?? 'user'
     const groupId = ev?.source?.groupId ?? ev?.source?.roomId ?? null

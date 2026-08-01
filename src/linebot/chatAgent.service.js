@@ -17,11 +17,14 @@
 // and loop. When a turn has no functionCall (just text), that text is the reply.
 //
 // Push vs reply: replyTokens expire in ~30s and the LLM round-trip can exceed
-// that. To keep the read-marker working, handle()/handleImage() race the LLM
-// call against a deadline — if the model is slow, we consume the reply token
-// with a brief ack BEFORE it expires (marking the user's message as read), then
-// deliver the real answer via pushMessage. replyOrPush still prefers a free
-// replyMessage whenever the token is alive at response time.
+// that. handle() races the LLM call against a deadline — if the model is slow we
+// spend the token on a brief ack before it expires, then deliver the real answer
+// via pushMessage. replyOrPush still prefers a free replyMessage whenever the
+// token is alive at response time.
+//
+// The "อ่านแล้ว" read receipt is a SEPARATE mechanism: lineWebhook fires
+// lineMessaging.markAsRead() with the webhook's markAsReadToken. Replying never
+// marks a message read, no matter which path it takes.
 
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
