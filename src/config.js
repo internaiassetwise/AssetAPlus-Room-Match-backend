@@ -27,10 +27,14 @@ const schema = z.object({
   // --- Concurrency / throughput -----------------------------------------
   // Max simultaneous chat turns the bot will process. Different Line users run
   // concurrently up to this cap; the same user is always serialized (one turn at
-  // a time, in order) so their chat history can't race. Sized against the DB
-  // pool: each turn holds DB connections only during short queries (released
-  // during the Gemini await), so 8 leaves headroom for web/admin traffic.
-  LINE_BOT_MAX_CONCURRENT: z.coerce.number().int().positive().default(8),
+  // a time, in order) so their chat history can't race.
+  //
+  // Sized from measured behaviour: a turn takes ~30s, nearly all of it waiting on
+  // Gemini (I/O, not CPU), and DB connections are held only for short queries in
+  // between. At the old cap of 8 a burst of 30 users meant the last one waited
+  // ~2 minutes; at 20 that drops to well under a minute. Raise DB_POOL_MAX
+  // alongside this — the pool must comfortably exceed the cap.
+  LINE_BOT_MAX_CONCURRENT: z.coerce.number().int().positive().default(20),
 
   // Per-LINE-user budget for LLM-backed bot turns. This is an anti-abuse ceiling,
   // NOT a customer quota: exceeding it hands the chat to a human admin rather
@@ -44,8 +48,10 @@ const schema = z.object({
   // line_reply_log) before the daily maintenance sweep prunes them. The durable
   // record of a customer request lives in admin_queue, not here. 0 = keep forever.
   LOG_RETENTION_DAYS:      z.coerce.number().int().nonnegative().default(90),
-  // Postgres pool size. Bumped from 10 to give headroom when the bot is busy.
-  DB_POOL_MAX:             z.coerce.number().int().positive().default(20),
+  // Postgres pool size. Must stay comfortably above LINE_BOT_MAX_CONCURRENT so a
+  // burst of bot turns can't starve web/admin traffic of connections — each turn
+  // only grabs a connection for short queries, but 20 turns can still overlap.
+  DB_POOL_MAX:             z.coerce.number().int().positive().default(30),
 
   // --- Gemini API (FAQ embeddings + rephrasing) -------------------------
   // Optional. If absent, /api/faqs and /api/faqs/search return 503 instead

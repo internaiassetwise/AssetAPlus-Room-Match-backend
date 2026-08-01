@@ -188,6 +188,17 @@ export async function handle(lineUserId, text, replyToken = null) {
   // chat for up to 25s while the LLM is thinking. No visible message.
   line.startLoading(lineUserId, 25).catch(() => {})
 
+  // Measured turn latency is ~30s (p95 ~56s) — at or past LINE's ~30s reply-token
+  // lifetime. Without this racer the token silently expires on most turns, so the
+  // answer falls back to a metered push AND the user's message is never marked
+  // read: from their side the bot just goes quiet for half a minute. The racer
+  // spends the token on a short ack if the LLM hasn't finished in time, then
+  // hands back null so the real answer goes out via push.
+  const racer = line.raceReplyToken(lineUserId, replyToken, {
+    deadlineMs: 4_000,
+    ackMessage: 'รับทราบค่ะ 🙏 กำลังหาข้อมูลให้สักครู่นะคะ',
+  })
+
   let r
   try {
     r = await runOnce(lineUserId, text)
@@ -198,16 +209,19 @@ export async function handle(lineUserId, text, replyToken = null) {
     // so history stays alternating — otherwise the next message dangles against
     // this one (same root cause as the fallback inside runOnce). Best-effort.
     try { await store.append(lineUserId, 'assistant', msg) } catch { /* ignore */ }
-    await line.replyOrPush(lineUserId, replyToken, msg)
+    await line.replyOrPush(lineUserId, racer.finish(), msg)
     return null
   }
 
+  // Reclaim the token if the ack never fired (fast turn); null once it has.
+  const token = racer.finish()
+
   if (r.status === 'not_configured') {
-    await line.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ ระบบยังไม่ได้ตั้งค่า AI กรุณาลองใหม่ภายหลัง')
+    await line.replyOrPush(lineUserId, token, 'ขออภัยค่ะ ระบบยังไม่ได้ตั้งค่า AI กรุณาลองใหม่ภายหลัง')
     return null
   }
   if (!r.reply) {
-    await line.replyOrPush(lineUserId, replyToken, [
+    await line.replyOrPush(lineUserId, token, [
       ...r.pushes,
       r.pushes.length
         ? 'เสร็จเรียบร้อยค่ะ แต่น้องห้องตอบข้อความไม่ได้ชั่วคราว หากมีปัญหาแจ้งได้นะคะ'
@@ -220,7 +234,7 @@ export async function handle(lineUserId, text, replyToken = null) {
   const quickReply = wantsViewing
     ? zoneQuickReply(await zonesRepo.findAll())
     : menuQuickReply()
-  await line.replyOrPush(lineUserId, replyToken, [
+  await line.replyOrPush(lineUserId, token, [
     { type: 'text', text: r.reply, quickReply },
     ...r.pushes,
   ])
