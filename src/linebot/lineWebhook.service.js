@@ -21,7 +21,7 @@ import * as viewingSlots from '../db/repositories/viewingSlots.repo.js'
 import { createForTenant } from '../db/repositories/viewings.repo.js'
 import { findByLineId as findTenantByLineId, createFromBot as createTenantFromBot } from '../db/repositories/tenants.repo.js'
 import { viewingConfirmation, welcome, menuQuickReply } from './flexMessages.js'
-import { notifyAdminGroup } from './adminAlert.service.js'
+import { notifyAdminGroup, alertAdmins } from './adminAlert.service.js'
 import * as chatSessions from '../db/repositories/chatSessions.repo.js'
 import * as adminQueue from '../db/repositories/adminQueue.repo.js'
 import { enqueue } from './dispatchQueue.service.js'
@@ -59,26 +59,6 @@ export async function handleEvent(payload) {
     const lineUserId = ev?.source?.userId ?? null
     const groupId    = ev?.source?.groupId ?? ev?.source?.roomId ?? null
     const key        = lineUserId || groupId || '_no_user'
-
-    // Throttle only the events that cost an LLM call: a 1:1 message. Postbacks
-    // (slot booking), follows and group chatter are cheap/deterministic and must
-    // never be dropped — throttling a booking postback would break the flow
-    // halfway through.
-    const isUserMessage = ev?.type === 'message' && (ev?.source?.type ?? 'user') === 'user'
-    if (isUserMessage && lineUserId) {
-      const { allowed, warn, retryAfterSec } = consumeRate(lineUserId)
-      if (!allowed) {
-        // Tell them ONCE per window (never spam), on the FREE reply token, then
-        // drop the event. Line already got its 200 from the route.
-        if (warn && ev?.replyToken) {
-          const mins = Math.max(1, Math.ceil(retryAfterSec / 60))
-          lineMessaging.replyOrPush(lineUserId, ev.replyToken,
-            `ตอนนี้มีข้อความเข้ามาถี่มากค่ะ 🙏 รบกวนรอสักครู่ประมาณ ${mins} นาที แล้วพิมพ์มาใหม่ได้เลยนะคะ`)
-            .catch(() => {})
-        }
-        continue
-      }
-    }
 
     // Serialize per user/group (in arrival order), run different users
     // concurrently up to a global cap. The route has ALREADY acked Line by the
@@ -123,9 +103,11 @@ async function processEvent(ev, { handle, handleImage }) {
       }
     } else if (eventType === 'message' && messageType === 'text') {
       if (await routeToLiveAgent(lineUserId, ev)) return // human owns the chat → skip the LLM
+      if (await handOffIfFlooding(lineUserId, ev?.message?.text ?? '', replyToken)) return
       await handle(lineUserId, ev?.message?.text ?? '', replyToken)
     } else if (eventType === 'message' && messageType === 'image') {
       if (await routeToLiveAgent(lineUserId, ev)) return
+      if (await handOffIfFlooding(lineUserId, '📷 (รูปภาพ)', replyToken)) return
       await handleImage(lineUserId, ev?.message?.id, replyToken)
     } else if (eventType === 'postback') {
       if (await routeToLiveAgent(lineUserId, ev)) return
@@ -155,6 +137,50 @@ async function processEvent(ev, { handle, handleImage }) {
   } catch (err) {
     logger.error({ err, lineUserId, eventType, messageType }, 'webhook dispatch failed')
   }
+}
+
+/**
+ * Budget guard for LLM-backed turns — a HAND-OFF, not a wall.
+ *
+ * The cap exists to stop an automated flood from running up an unbounded Gemini
+ * bill and monopolising the concurrency pool. It must never punish a customer
+ * for asking a lot: real traffic peaks around 16 messages / 5 min, and the cap
+ * sits far above that (a human can't outpace it, because each turn waits on the
+ * bot's reply — a script blows through it in seconds).
+ *
+ * When someone does exceed it we escalate to a human instead of going silent:
+ * one admin_queue ticket is opened, the customer is told an admin is taking
+ * over, and further messages in the window are dropped quietly so a flood can't
+ * spam the inbox. Once the window rolls over the bot resumes on its own.
+ *
+ * MUST be called AFTER routeToLiveAgent: a customer already talking to a human
+ * costs no LLM at all, and dropping those messages would silently break the
+ * live chat.
+ *
+ * @returns {Promise<boolean>} true → caller must skip the LLM
+ */
+async function handOffIfFlooding(lineUserId, userText, replyToken) {
+  if (!lineUserId) return false
+  const { allowed, warn } = consumeRate(lineUserId)
+  if (allowed) return false
+
+  // Only the FIRST overflow in the window notifies anyone.
+  if (warn) {
+    try {
+      await alertAdmins({
+        lineUserId,
+        reason:  'system-error',
+        summary: 'ลูกค้าส่งข้อความถี่ผิดปกติ — บอทหยุดตอบชั่วคราว รอแอดมินดูแลต่อ',
+        originalPayload: { message: String(userText || '').slice(0, 500) },
+      })
+    } catch (err) {
+      logger.error({ err, lineUserId }, 'flood hand-off: alertAdmins failed')
+    }
+    await lineMessaging.replyOrPush(lineUserId, replyToken,
+      'ขอส่งต่อให้แอดมินดูแลต่อนะคะ 🙋 เดี๋ยวแอดมินตอบให้ค่ะ')
+      .catch(() => {})
+  }
+  return true
 }
 
 /**

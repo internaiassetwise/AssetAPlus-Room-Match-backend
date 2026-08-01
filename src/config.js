@@ -32,11 +32,12 @@ const schema = z.object({
   // during the Gemini await), so 8 leaves headroom for web/admin traffic.
   LINE_BOT_MAX_CONCURRENT: z.coerce.number().int().positive().default(8),
 
-  // Per-LINE-user cap on LLM-backed bot turns. Every text/image message costs a
-  // Gemini call, so an unthrottled spammer means an unbounded bill AND starves
-  // real users out of the concurrency pool. 20 messages / 5 min is far above
-  // normal human pace. Set LINE_BOT_RATE_MAX=0 to disable (not recommended).
-  LINE_BOT_RATE_MAX:       z.coerce.number().int().nonnegative().default(20),
+  // Per-LINE-user budget for LLM-backed bot turns. This is an anti-abuse ceiling,
+  // NOT a customer quota: exceeding it hands the chat to a human admin rather
+  // than refusing service (see handOffIfFlooding). Measured real traffic peaks
+  // at ~16 messages / 5 min, so 60 leaves a wide margin for an enthusiastic
+  // customer while still stopping a script cold. LINE_BOT_RATE_MAX=0 disables it.
+  LINE_BOT_RATE_MAX:       z.coerce.number().int().nonnegative().default(60),
   LINE_BOT_RATE_WINDOW_MS: z.coerce.number().int().positive().default(5 * 60_000),
 
   // How long to keep the diagnostic Line traffic logs (line_webhook_log /
