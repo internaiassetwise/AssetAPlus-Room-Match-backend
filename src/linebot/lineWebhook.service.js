@@ -25,6 +25,7 @@ import { notifyAdminGroup } from './adminAlert.service.js'
 import * as chatSessions from '../db/repositories/chatSessions.repo.js'
 import * as adminQueue from '../db/repositories/adminQueue.repo.js'
 import { enqueue } from './dispatchQueue.service.js'
+import { consume as consumeRate } from './botRateLimit.service.js'
 
 const SIGNATURE_HEADER = 'x-line-signature'
 
@@ -58,6 +59,27 @@ export async function handleEvent(payload) {
     const lineUserId = ev?.source?.userId ?? null
     const groupId    = ev?.source?.groupId ?? ev?.source?.roomId ?? null
     const key        = lineUserId || groupId || '_no_user'
+
+    // Throttle only the events that cost an LLM call: a 1:1 message. Postbacks
+    // (slot booking), follows and group chatter are cheap/deterministic and must
+    // never be dropped — throttling a booking postback would break the flow
+    // halfway through.
+    const isUserMessage = ev?.type === 'message' && (ev?.source?.type ?? 'user') === 'user'
+    if (isUserMessage && lineUserId) {
+      const { allowed, warn, retryAfterSec } = consumeRate(lineUserId)
+      if (!allowed) {
+        // Tell them ONCE per window (never spam), on the FREE reply token, then
+        // drop the event. Line already got its 200 from the route.
+        if (warn && ev?.replyToken) {
+          const mins = Math.max(1, Math.ceil(retryAfterSec / 60))
+          lineMessaging.replyOrPush(lineUserId, ev.replyToken,
+            `ตอนนี้มีข้อความเข้ามาถี่มากค่ะ 🙏 รบกวนรอสักครู่ประมาณ ${mins} นาที แล้วพิมพ์มาใหม่ได้เลยนะคะ`)
+            .catch(() => {})
+        }
+        continue
+      }
+    }
+
     // Serialize per user/group (in arrival order), run different users
     // concurrently up to a global cap. The route has ALREADY acked Line by the
     // time these jobs run. enqueue swallows errors so one bad event can't break

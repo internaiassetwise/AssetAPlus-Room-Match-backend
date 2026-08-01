@@ -1,8 +1,8 @@
 // src/routes/viewings.js — Tenant-facing calendar (วันนัดชมห้อง) API.
 //
 //   POST /api/viewings             — DISABLED for human tenants (403 CONTACT_ADMIN).
-//                                  Enabled with X-Bot-Secret: the Line bot books
-//                                  the slot on the tenant's behalf.
+//                                  Bookings happen in-process from the Line chat
+//                                  (slot postback) or are created by admin.
 //   GET  /api/viewings?role=tenant  — tenant's own viewings
 //   GET  /api/viewings?role=landlord — landlord's incoming requests
 //   PATCH /api/viewings/:id        — landlord confirm/decline (tenant self-cancel
@@ -15,13 +15,11 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import * as repo from '../db/repositories/viewings.repo.js'
-import * as tenantRepo from '../db/repositories/tenants.repo.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate }     from '../middleware/validate.js'
-import { requireBot }   from '../middleware/requireBot.js'
 import { AppError }     from '../middleware/AppError.js'
 import { requireUser, requireLandlord } from '../auth/middleware.js'
-import { config }       from '../config.js'
+import * as lineMessaging from '../linebot/lineMessaging.service.js'
 
 export const viewings = Router()
 
@@ -36,63 +34,17 @@ const idParam = z.object({ id: z.coerce.number().int().positive() })
 /**
  * Tenants request viewings via Line — they do not self-book in the app.
  * Endpoint kept so a stale frontend tab receives a clear 403 CONTACT_ADMIN.
- *
- * Bot bypass: with X-Bot-Secret + X-Bot-LineUserId we look up (or create) the
- * tenant stub and POST a viewing in their name. Status starts as 'requested'
- * so the dashboard sees a normal flow.
  */
-viewings.post('/', asyncHandler(async (req, res) => {
-  const isBot = !!req.headers['x-bot-secret']
-  if (!isBot) {
-    await new Promise((resolve, reject) =>
-      requireUser(req, res, (err) => err ? reject(err) : resolve()))
-    throw new AppError(
-      403,
-      'CONTACT_ADMIN',
-      'การนัดชมห้องต้องติดต่อแอดมินทาง Line เพื่อยืนยันวันเวลา',
-    )
-  }
-
-  await new Promise((resolve, reject) =>
-    requireBot(req, res, (err) => err ? reject(err) : resolve()))
-
-  const body = z.object({
-    roomId:           z.coerce.number().int().positive(),
-    tenantLineUserId: z.string().min(1),
-    scheduledAt:      z.string().regex(/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/),
-    note:             z.string().max(500).optional().or(z.literal('')),
-  }).parse(req.body)
-
-  const lineUserId = req.bot?.lineUserId || body.tenantLineUserId
-
-  // Find or create the tenant stub.
-  let tenant = await tenantRepo.findByLineId(lineUserId)
-  if (!tenant) tenant = await tenantRepo.createFromBot(lineUserId)
-
-  const created = await repo.createForTenant({
-    tenantId:           tenant.id,
-    tenantLineUserId:   lineUserId,        // cached for the bot's confirm-viewing flow
-    roomId:             body.roomId,
-    scheduledFor:       body.scheduledAt,
-    note:               body.note || '',
-  })
-  res.status(201).json(created)
+viewings.post('/', requireUser, asyncHandler(async () => {
+  // Tenants never self-book over HTTP: they pick a slot in the Line chat (the
+  // bot creates the viewing in-process) or ask admin. Kept mounted so a stale
+  // frontend tab gets a clear 403 instead of a confusing 404.
+  throw new AppError(
+    403,
+    'CONTACT_ADMIN',
+    'การนัดชมห้องต้องติดต่อแอดมินทาง Line เพื่อยืนยันวันเวลา',
+  )
 }))
-
-/**
- * GET /api/viewings/:id — bot pulls a single viewing so it can render the
- * confirmation Flex and know which Line user to push to. Gated by
- * X-Bot-Secret so the public can't enumerate viewing IDs.
- */
-viewings.get('/:id',
-  requireBot,
-  validate({ params: idParam }),
-  asyncHandler(async (req, res) => {
-    const item = await repo.findById(req.params.id)
-    if (!item) throw new AppError(404, 'VIEWING_NOT_FOUND', 'ไม่พบรายการนัดชมห้องนี้')
-    res.json(item)
-  }),
-)
 
 /**
  * List viewings for the caller.
@@ -165,10 +117,10 @@ viewings.patch('/:id', validate({ params: idParam, body: patchBody }),
       // flips to 'confirmed'. Failures here are logged but don't fail the
       // landlord's PATCH — DB state is already updated, admin can retry.
       if (req.body.status === 'confirmed' && updated?.tenant_line_user_id) {
-        await notifyBotOfConfirmation(updated).catch((err) =>
+        await notifyTenantOfConfirmation(updated).catch((err) =>
           req.log?.error?.(err) ??
             // eslint-disable-next-line no-console
-            console.error('[viewings] bot push failed:', err.message))
+            console.error('[viewings] tenant push failed:', err.message))
       }
 
       return res.json(updated)
@@ -197,30 +149,25 @@ function runMiddleware(mw, req, res) {
 }
 
 /**
- * Fire-and-log POST to the bot's /api/admin/confirm-viewing so the tenant
- * gets a Flex confirmation pushed to them on Line. Best-effort: we log
- * and move on so a bot outage doesn't break the landlord's confirmation
- * flow.
+ * Push the confirmation to the tenant on Line, IN-PROCESS.
+ *
+ * This used to POST to the retired .NET bot (ROOM_MATCH_BOT_URL + X-Bot-Secret);
+ * with that service gone the call always failed silently, so a landlord
+ * confirming from their portal notified nobody. Now it sends through the same
+ * Messaging API client the admin confirm path uses.
  */
-async function notifyBotOfConfirmation(viewing) {
-  const botBaseUrl = config.ROOM_MATCH_BOT_URL
-  const botSecret  = config.BOT_SHARED_SECRET
-  if (!botBaseUrl || !botSecret) {
-    // eslint-disable-next-line no-console
-    console.warn('[viewings] ROOM_MATCH_BOT_URL / BOT_SHARED_SECRET not set — skipping bot push')
-    return
-  }
-
-  const res = await fetch(`${botBaseUrl}/api/admin/confirm-viewing`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Bot-Secret': botSecret,
-    },
-    body: JSON.stringify({ viewingId: viewing.id }),
+async function notifyTenantOfConfirmation(viewing) {
+  const lineUserId = viewing?.tenant_line_user_id || viewing?.tenant_line_id
+  if (!lineUserId || !lineMessaging.isConfigured()) return
+  const when = (() => {
+    try {
+      return new Date(viewing.scheduled_for).toLocaleString('th-TH', {
+        timeZone: 'Asia/Bangkok', dateStyle: 'long', timeStyle: 'short',
+      })
+    } catch { return String(viewing.scheduled_for) }
+  })()
+  await lineMessaging.pushMessage(lineUserId, {
+    type: 'text',
+    text: `✅ ยืนยันนัดชมห้อง "${viewing.room_title ?? ''}" แล้วค่ะ เจอกัน ${when} นะคะ`,
   })
-  if (!res.ok) {
-    const err = await res.text().catch(() => '')
-    throw new Error(`bot push failed: ${res.status} ${err}`)
-  }
 }

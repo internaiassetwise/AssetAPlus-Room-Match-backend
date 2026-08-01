@@ -8,7 +8,6 @@
 //   match is found, the bot escalates to admin as before.
 //
 // Admin CRUD lives at /api/faqs and is gated by requireAdmin.
-// /api/faqs/search is gated by requireBot (only the bot calls it).
 //
 // Phase 2.8: dynamic block-based answers.
 //   FAQs can be authored as a list of typed blocks (text / count / stat /
@@ -27,7 +26,6 @@ import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate }     from '../middleware/validate.js'
 import { AppError }     from '../middleware/AppError.js'
 import { requireAdmin } from '../middleware/requireAdmin.js'
-import { requireBot }   from '../middleware/requireBot.js'
 
 export const faqs = Router()
 
@@ -389,50 +387,3 @@ const searchBody = z.object({
 // Phase 2.8: if the top match has `answer_blocks`, render them with the
 // bot's context before passing to Gemini rephrase. Legacy rows with no
 // blocks fall through to `top.answer` verbatim.
-faqs.post('/search', requireBot, validate({ body: searchBody }),
-  asyncHandler(async (req, res) => {
-    if (!gemini.isConfigured()) {
-      throw new AppError(503, 'GEMINI_DISABLED', 'ยังไม่ได้ตั้งค่า GOOGLE_GEMINI_API_KEY')
-    }
-    const { query: q, topK, context = {} } = req.body
-
-    const queryEmbedding = await gemini.embedOne(q, { taskType: 'RETRIEVAL_QUERY' })
-    if (!queryEmbedding) {
-      throw new AppError(502, 'GEMINI_EMBED_FAILED', 'ไม่สามารถสร้าง embedding สำหรับคำถามได้')
-    }
-
-    const matches = await repo.vectorSearch(queryEmbedding, { topK, minSimilarity: 0 })
-    if (matches.length === 0) {
-      return res.json({ found: false, answer: null, faqId: null, confidence: null, category: null })
-    }
-
-    const top = matches[0]
-    let renderedTopAnswer = null
-    if (Array.isArray(top.answerBlocks) && top.answerBlocks.length > 0) {
-      try {
-        renderedTopAnswer = await renderAnswerBlocks(
-          { answer_blocks: top.answerBlocks },
-          context,
-        )
-      } catch (err) {
-        renderedTopAnswer = null   // fall through to legacy path
-      }
-    }
-
-    const matchesForRephrase = matches.map((m, i) => (
-      i === 0 && renderedTopAnswer
-        ? { ...m, answer: renderedTopAnswer }
-        : m
-    ))
-
-    const rephrased = await gemini.rephrase(q, matchesForRephrase)
-
-    return res.json({
-      found:      true,
-      answer:     rephrased ?? (renderedTopAnswer ?? top.answer),
-      faqId:      top.id,
-      confidence: Number(top.similarity.toFixed(4)),
-      category:   top.category ?? null,
-    })
-  }),
-)

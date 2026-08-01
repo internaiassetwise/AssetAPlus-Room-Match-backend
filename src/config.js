@@ -31,6 +31,18 @@ const schema = z.object({
   // pool: each turn holds DB connections only during short queries (released
   // during the Gemini await), so 8 leaves headroom for web/admin traffic.
   LINE_BOT_MAX_CONCURRENT: z.coerce.number().int().positive().default(8),
+
+  // Per-LINE-user cap on LLM-backed bot turns. Every text/image message costs a
+  // Gemini call, so an unthrottled spammer means an unbounded bill AND starves
+  // real users out of the concurrency pool. 20 messages / 5 min is far above
+  // normal human pace. Set LINE_BOT_RATE_MAX=0 to disable (not recommended).
+  LINE_BOT_RATE_MAX:       z.coerce.number().int().nonnegative().default(20),
+  LINE_BOT_RATE_WINDOW_MS: z.coerce.number().int().positive().default(5 * 60_000),
+
+  // How long to keep the diagnostic Line traffic logs (line_webhook_log /
+  // line_reply_log) before the daily maintenance sweep prunes them. The durable
+  // record of a customer request lives in admin_queue, not here. 0 = keep forever.
+  LOG_RETENTION_DAYS:      z.coerce.number().int().nonnegative().default(90),
   // Postgres pool size. Bumped from 10 to give headroom when the bot is busy.
   DB_POOL_MAX:             z.coerce.number().int().positive().default(20),
 

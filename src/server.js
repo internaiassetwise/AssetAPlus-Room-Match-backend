@@ -8,6 +8,7 @@ import { ping, close as closePool } from './db/pool.js'
 import { ensureBootstrapAdmin } from './db/repositories/admins.repo.js'
 import { createApp }      from './app.js'
 import { start as startViewingReminders, stop as stopViewingReminders } from './linebot/viewingReminder.service.js'
+import { start as startMaintenance, stop as stopMaintenance } from './services/maintenance.service.js'
 
 async function main() {
   // 1. Verify the DB is reachable BEFORE we accept traffic.
@@ -44,6 +45,8 @@ async function main() {
     // Start the upcoming-viewing LINE reminder scheduler (only in the real
     // server process — never in scripts/tests that just import the repos).
     startViewingReminders()
+    // Daily housekeeping: prune expired sessions + old Line traffic logs.
+    startMaintenance()
   })
 
   // 4. Graceful shutdown.
@@ -53,6 +56,7 @@ async function main() {
     shuttingDown = true
     logger.info({ signal }, 'shutting down…')
     stopViewingReminders()
+    stopMaintenance()
     server.close(async () => {
       try { await closePool() } catch (e) { logger.warn({ e }, 'pool end errored') }
       logger.info('bye 👋')
