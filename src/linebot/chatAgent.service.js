@@ -262,12 +262,30 @@ async function runAgentLoop({ lineUserId, history }) {
   const pushes = []
   let retriedEmpty = false
 
+  // Where the wall-clock actually goes. Measured Gemini latency is 1-3s per call
+  // while real turns ran 30-110s, so the gap has to be found, not guessed: this
+  // records the cost of every model call and every tool so the logs answer it.
+  const t0 = Date.now()
+  const timings = { llmMs: 0, toolMs: 0, rounds: 0, tools: [] }
+  const emitTimings = () => {
+    logger.info({
+      lineUserId,
+      totalMs: Date.now() - t0,
+      llmMs:   timings.llmMs,
+      toolMs:  timings.toolMs,
+      otherMs: Date.now() - t0 - timings.llmMs - timings.toolMs,
+      rounds:  timings.rounds,
+      tools:   timings.tools,
+    }, 'agent turn timing')
+  }
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     // Round 0: if the user is clearly asking to browse rooms, FORCE searchRooms
     // so the carousel always appears. The model otherwise sometimes skips the
     // tool (now that it only writes a one-line intro) and the user would see a
     // text intro with no rooms. Later rounds stay AUTO.
     const forceSearch = (round === 0 && wantsRoomSearch(lastUserText))
+    const tLlm = Date.now()
     const turn = await gemini.chatTurn({
       contents,
       tools: tools.DECLARATIONS,
@@ -275,20 +293,23 @@ async function runAgentLoop({ lineUserId, history }) {
         ? { functionCallingConfig: { mode: 'ANY', allowedFunctionNames: ['searchRooms'] } }
         : { functionCallingConfig: { mode: 'AUTO' } },
     })
+    timings.llmMs += Date.now() - tLlm
+    timings.rounds = round + 1
 
     if (!turn.ok) {
       logger.warn({ lineUserId, status: turn.status, error: turn.error, round }, 'chatTurn failed in loop')
+      emitTimings()
       return { reply: null, pushes }
     }
 
     const fcs = Array.isArray(turn.functionCalls) ? turn.functionCalls : []
     if (fcs.length === 0) {
       const text = turn.text && turn.text.trim() ? turn.text.trim() : null
-      if (text) return { reply: text, pushes }
+      if (text) { emitTimings(); return { reply: text, pushes } }
       // Empty turn — a thinking model occasionally emits no visible text or
       // functionCall (e.g. when truncated by the output-token cap). Give it one
       // more shot before giving up, so the user rarely sees "ระบบตอบกลับไม่ได้".
-      if (retriedEmpty) return { reply: null, pushes }
+      if (retriedEmpty) { emitTimings(); return { reply: null, pushes } }
       logger.warn({ lineUserId, round, finishReason: turn.finishReason, usage: turn.usage }, 'empty model turn — retrying once')
       retriedEmpty = true
       continue
@@ -302,7 +323,11 @@ async function runAgentLoop({ lineUserId, history }) {
     const userParts = []
     for (const fc of fcs) {
       logger.info({ lineUserId, tool: fc.name, args: fc.args, round }, 'agent calling tool')
+      const tTool = Date.now()
       const result = await tools.dispatch(fc.name, fc.args, ctx)
+      const toolMs = Date.now() - tTool
+      timings.toolMs += toolMs
+      timings.tools.push(`${fc.name}:${toolMs}ms`)
       if (result && Array.isArray(result._push)) pushes.push(...result._push)
       const { _push, ...response } = result
       const sig = fc.thoughtSignature ? { thoughtSignature: fc.thoughtSignature } : {}
@@ -317,6 +342,7 @@ async function runAgentLoop({ lineUserId, history }) {
     ]
   }
 
+  emitTimings()
   logger.warn({ lineUserId, pushes: pushes.length }, 'agent loop hit round cap without a text reply')
   // If a side-effecting tool already ran, acknowledge the partial completion
   // rather than a generic "try again" (which would sit next to a success card

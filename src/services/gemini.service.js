@@ -26,8 +26,16 @@ import { logger } from '../logger.js'
 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1'
 
-// 60s timeout is plenty — embeddings come back in <500ms, rephrase in <3s.
-const TIMEOUT_MS = 60_000
+// Per-attempt timeout. Measured healthy latency is 0.8s (embed), 1.3s (chatTurn
+// with tools), 2.6s (rephrase) — so a call still open after 20s is hung, not
+// slow, and waiting longer only makes a person stare at a silent chat.
+//
+// This was 60s, which combined with MAX_ATTEMPTS=4 meant a SINGLE Gemini call
+// could block a turn for ~4 minutes; a turn runs up to MAX_TOOL_ROUNDS of these.
+// That is the leading explanation for the 30-110s turn times seen in the logs.
+// Failing fast and retrying is strictly better here: the retry usually lands in
+// ~1s. Override with GEMINI_TIMEOUT_MS if a slower model needs more room.
+const TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS) || 20_000
 
 const isEnabled = () => !!config.GOOGLE_GEMINI_API_KEY
 
