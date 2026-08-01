@@ -61,6 +61,25 @@ export function consume(lineUserId) {
   return { allowed: false, warn, retryAfterSec }
 }
 
+/**
+ * Clear a user's budget immediately.
+ *
+ * Called when an admin takes over or hands the chat back: a human has looked at
+ * this person and decided they are a real customer, so the anti-abuse counter
+ * must not outlive that judgement. Without this, closing a ticket inside the
+ * window left the bot silently ignoring the customer for the remainder — and
+ * silently, since the one-time hand-off notice had already been spent.
+ *
+ * @param {string} lineUserId
+ * @returns {boolean} true if a bucket was actually cleared
+ */
+export function reset(lineUserId) {
+  if (!lineUserId) return false
+  const had = buckets.delete(lineUserId)
+  if (had) logger.info({ lineUserId }, 'line bot rate limit reset (admin handled)')
+  return had
+}
+
 /** Test/debug helper. */
 export function _snapshot() {
   return { tracked: buckets.size, max: config.LINE_BOT_RATE_MAX, windowMs: config.LINE_BOT_RATE_WINDOW_MS }

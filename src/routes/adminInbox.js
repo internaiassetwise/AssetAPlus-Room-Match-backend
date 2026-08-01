@@ -24,6 +24,7 @@ import { requireAdmin } from '../middleware/requireAdmin.js'
 import { logger } from '../logger.js'
 import * as lineMessaging from '../linebot/lineMessaging.service.js'
 import { notifyAdminGroup } from '../linebot/adminAlert.service.js'
+import { reset as resetBotRateLimit } from '../linebot/botRateLimit.service.js'
 
 export const adminInbox = Router()
 
@@ -135,6 +136,9 @@ adminInbox.post('/:id/takeover', requireAdmin, validate({ params: idParam }),
     const admin = req.admin?.displayName || req.admin?.username || req.admin?.id || null
     await repo.reopen(item.id)
     await chatSessions.beginTakeover(item.lineUserId, { ticketId: item.id, adminId: admin })
+    // An admin has judged this person a real customer — drop any anti-abuse
+    // counter so the bot is immediately responsive again when handed back.
+    resetBotRateLimit(item.lineUserId)
     await pushToUser(item.lineUserId, NOTICE_TAKEOVER)
     // Announce WHO accepted, so the team can track which admin is handling it.
     notifyAdminGroup(`🙋 @${admin || 'แอดมิน'} รับเรื่อง "${item.summary || ''}" แล้ว`)
@@ -147,6 +151,10 @@ adminInbox.post('/:id/release', requireAdmin, validate({ params: idParam }),
     const item = await repo.findById(req.params.id)
     if (!item) throw new AppError(404, 'INQUIRY_NOT_FOUND', 'ไม่พบรายการนี้')
     await chatSessions.endTakeover(item.lineUserId)
+    // Clear the flood counter too. Without this, closing a ticket inside the
+    // rate-limit window left the bot ignoring the customer for the remainder,
+    // with no message explaining why.
+    resetBotRateLimit(item.lineUserId)
     const updated = await repo.markResolved(item.id)
     await pushToUser(item.lineUserId, NOTICE_RELEASE)
     res.json(await withLiveOne(updated))
