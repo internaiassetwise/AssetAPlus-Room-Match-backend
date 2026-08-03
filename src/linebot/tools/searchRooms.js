@@ -14,6 +14,7 @@
 import { findByName } from '../../db/repositories/zones.repo.js'
 import { findAvailable } from '../../db/repositories/rooms.repo.js'
 import { roomCarousel } from '../flexMessages.js'
+import { maskRoomCode, maskCodeInText } from '../roomCode.js'
 
 export const name = 'searchRooms'
 
@@ -126,8 +127,10 @@ export async function handler(args, ctx) {
     count: rooms.length,
     rooms: rooms.map((r) => ({
       id: r.id,
-      roomCode: r.roomCode ?? null,
-      title: r.title,
+      // Masked before it ever reaches Gemini — the model cannot leak a room
+      // number it was never given, which is stronger than a prompt rule.
+      roomCode: maskRoomCode(r.roomCode),
+      title: maskCodeInText(r.title, r.roomCode),
       price: r.price,
       beds: r.beds,
       baths: r.baths,

@@ -9,6 +9,7 @@
 import { findById } from "../../db/repositories/rooms.repo.js"
 import { findByRoom } from "../../db/repositories/roomImages.repo.js"
 import { findForRoomPublic } from "../../db/repositories/viewings.repo.js"
+import { maskCodeInText } from '../roomCode.js'
 
 export const name = "getRoomDetails"
 
@@ -79,8 +80,10 @@ export async function handler(args, ctx) {
     return {
       room: {
         id:            room.id,
-        title:         room.title,
-        description:   room.description,
+        // Admins put the unit number in the title and description; masked here
+        // so the model never receives a full room code it could repeat.
+        title:         maskCodeInText(room.title, room.roomCode),
+        description:   maskCodeInText(room.description, room.roomCode),
         price:         room.price,
         beds:          room.beds,
         baths:         room.baths,

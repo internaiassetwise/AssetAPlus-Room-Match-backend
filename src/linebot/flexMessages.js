@@ -10,6 +10,7 @@
 //   2) Simple confirmation cards: viewingConfirmation, pendingListing, welcome.
 
 import { config } from '../config.js'
+import { maskRoomCode, maskCodeInText } from './roomCode.js'
 
 const TZ = 'Asia/Bangkok'
 
@@ -100,22 +101,28 @@ export function roomCard(room = {}) {
     room.propertyType ? PROPERTY_LABEL[room.propertyType] || room.propertyType : '',
   ].filter(Boolean).join(' · ')
 
+  const shownCode = maskRoomCode(room.roomCode)
+  // Admins often put the unit number in the title ("Kave Pop Salaya - A0707"),
+  // which would hand back the very code the line below it is hiding.
+  const shownTitle = maskCodeInText(room.title, room.roomCode) || 'ห้องเช่า'
+
   const body = {
     type: 'box', layout: 'vertical', spacing: 'sm', contents: [
-      { type: 'text', text: room.title || 'ห้องเช่า', weight: 'bold', size: 'lg', wrap: true, color: '#1A1A1A' },
-      // Identify the room by its room number (roomCode) when present, so users
-      // (and the bot) refer to a room by "ห้อง A-301" rather than an internal id.
-      ...(room.roomCode ? [{ type: 'text', text: `ห้อง ${room.roomCode}`, size: 'sm', color: '#6B7280', wrap: true }] : []),
+      { type: 'text', text: shownTitle, weight: 'bold', size: 'lg', wrap: true, color: '#1A1A1A' },
+      // Identify the room by its room number so users (and the bot) refer to a
+      // room by "ห้อง A012xx" rather than an internal id. Masked — the tail of a
+      // room number points at a real unit and the customer doesn't need it.
+      ...(shownCode ? [{ type: 'text', text: `ห้อง ${shownCode}`, size: 'sm', color: '#6B7280', wrap: true }] : []),
       { type: 'text', text: rentText(room.price), weight: 'bold', size: 'md', color: '#0A7C3B' },
       ...(specs ? [{ type: 'text', text: specs, size: 'sm', color: '#6B7280', wrap: true }] : []),
       ...(room.zone ? [{ type: 'text', text: `ย่าน${room.zone}`, size: 'sm', color: '#6B7280' }] : []),
     ],
   }
-  // Human-facing labels use the room number (roomCode); the internal id travels
+  // Human-facing labels use the MASKED room number; the internal id travels
   // invisibly in the postback `data` so tool lookups stay reliable even though
   // the user never sees the id. Fall back to "ห้องนี้" when a room has no code.
-  const viewingText = room.roomCode ? `อยากนัดชมห้อง ${room.roomCode}` : 'อยากนัดชมห้องนี้'
-  const detailText  = room.roomCode ? `ขอดูรายละเอียดห้อง ${room.roomCode}` : 'ขอดูรายละเอียดห้องนี้'
+  const viewingText = shownCode ? `อยากนัดชมห้อง ${shownCode}` : 'อยากนัดชมห้องนี้'
+  const detailText  = shownCode ? `ขอดูรายละเอียดห้อง ${shownCode}` : 'ขอดูรายละเอียดห้องนี้'
 
   // ดูรายละเอียด opens the room's page on the website when a web origin is
   // configured (WEB_BASE_URL, falling back to APP_BASE_URL). With no origin it
