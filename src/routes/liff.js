@@ -77,9 +77,22 @@ function renderListingHtml(liffId, submitUrl) {
     label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; }
     .opt { font-weight: 400; color: #9CA3AF; }
     input, select, textarea {
-      width: 100%; padding: 10px 12px; font-size: 15px;
+      width: 100%; padding: 10px 12px; font-size: 16px;
       border: 1px solid #D1D5DB; border-radius: 10px; background: #fff;
     }
+    /* 16px above is deliberate: iOS Safari zooms the page in on focus for
+       anything smaller, which throws this form off-screen mid-entry. */
+    .contact-person {
+      margin-top: 14px; padding: 10px 12px;
+      border: 1px dashed #D1D5DB; border-radius: 10px; background: #FAFAFA;
+    }
+    .contact-person > summary {
+      font-size: 13px; font-weight: 600; color: #1F4068;
+      cursor: pointer; list-style: none; min-height: 24px;
+    }
+    .contact-person > summary::-webkit-details-marker { display: none; }
+    .contact-person > summary::before { content: '+ '; font-weight: 700; }
+    .contact-person[open] > summary::before { content: '− '; }
     textarea { resize: vertical; min-height: 80px; }
     .row { display: flex; gap: 12px; }
     .row > div { flex: 1; }
@@ -107,6 +120,28 @@ function renderListingHtml(liffId, submitUrl) {
 
       <label for="contactPhone">เบอร์โทร <span class="opt">*</span></label>
       <input id="contactPhone" name="contactPhone" type="tel" required placeholder="เช่น 081-234-5678" />
+
+      <!-- Contact person. Collapsed by default: most owners are their own
+           contact, and three extra fields on a phone form is where people give
+           up. <details> keeps it one tap away without any JS. -->
+      <details class="contact-person">
+        <summary>ลงทะเบียนแทนคนอื่น? (เช่น ลงให้พ่อแม่)</summary>
+        <label for="contactPersonName">ชื่อผู้ติดต่อ</label>
+        <input id="contactPersonName" name="contactPersonName" type="text" placeholder="ชื่อคนที่ให้ติดต่อกลับ" />
+
+        <label for="contactPersonPhone">เบอร์ผู้ติดต่อ</label>
+        <input id="contactPersonPhone" name="contactPersonPhone" type="tel" placeholder="เบอร์ที่โทรติดจริง" />
+
+        <label for="contactPersonRelation">ความสัมพันธ์กับเจ้าของห้อง</label>
+        <select id="contactPersonRelation" name="contactPersonRelation">
+          <option value="">— เลือก —</option>
+          <option value="child">ลูก</option>
+          <option value="spouse">คู่สมรส</option>
+          <option value="relative">ญาติ</option>
+          <option value="agent">นายหน้า</option>
+          <option value="other">อื่นๆ</option>
+        </select>
+      </details>
 
       <label for="title">ชื่อห้อง</label>
       <input id="title" name="title" type="text" required placeholder="เช่น คอนโด ใกล้ BTS" />
@@ -284,10 +319,21 @@ liff.post('/listing/submit',
   // current — the landlord might use a different number next time.
   const contactName  = String(req.body.contactName || '').trim()
   const contactPhone = String(req.body.contactPhone || '').trim()
-  if (contactName || contactPhone) {
+  // Whoever should actually be called, when that is not the owner. Relation is
+  // validated against the same list the admin form offers; anything else is
+  // dropped rather than trusted, since this arrives from a public form.
+  const RELATIONS = ['child', 'spouse', 'relative', 'agent', 'other']
+  const cpName     = String(req.body.contactPersonName  || '').trim().slice(0, 160)
+  const cpPhone    = String(req.body.contactPersonPhone || '').trim().slice(0, 40)
+  const cpRelation = RELATIONS.includes(String(req.body.contactPersonRelation || '').trim())
+    ? String(req.body.contactPersonRelation).trim() : null
+  if (contactName || contactPhone || cpName || cpPhone) {
     await landlords.update(landlord.id, {
       ...(contactName  ? { fullName: contactName }  : {}),
       ...(contactPhone ? { phone:    contactPhone } : {}),
+      ...(cpName     ? { contactName:     cpName }     : {}),
+      ...(cpPhone    ? { contactPhone:    cpPhone }    : {}),
+      ...(cpRelation ? { contactRelation: cpRelation } : {}),
     })
   }
 
@@ -346,7 +392,7 @@ liff.post('/listing/submit',
     }
   }
 
-  notifyAdminGroup(`🏠 [ประกาศใหม่รออนุมัติ]\n"${title}"\nเจ้าของห้อง: ${contactName || '—'} · โทร ${contactPhone || '—'}\n— อนุมัติ/ปฏิเสธได้ที่ /admin/pending-listings`)
+  notifyAdminGroup(`🏠 [ประกาศใหม่รออนุมัติ]\n"${title}"\nเจ้าของห้อง: ${contactName || '—'} · โทร ${contactPhone || '—'}${cpName || cpPhone ? `\nติดต่อผ่าน: ${cpName || '—'} · โทร ${cpPhone || '—'}` : ''}\n— อนุมัติ/ปฏิเสธได้ที่ /admin/pending-listings`)
 
   return res.status(201).json({ ok: true, roomId: room.id })
 }))

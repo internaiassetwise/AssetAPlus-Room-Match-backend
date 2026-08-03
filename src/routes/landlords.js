@@ -43,6 +43,12 @@ const createBody = z.object({
   companyName: z.string().trim().max(160).nullable().optional(),
   taxId:       z.string().trim().max(40).nullable().optional(),
   note:        z.string().trim().max(1000).nullable().optional(),
+  // Who to actually call. The owner is often not the person who answers: an
+  // adult child registers for a parent, a spouse handles viewings, an agent
+  // fronts for the owner. Blank means the owner is their own contact.
+  contactName:     z.string().trim().max(160).nullable().optional(),
+  contactPhone:    z.string().trim().max(40).nullable().optional(),
+  contactRelation: z.enum(['self', 'child', 'spouse', 'relative', 'agent', 'other']).nullable().optional(),
 })
 
 const patchBody = z.object({
@@ -54,6 +60,12 @@ const patchBody = z.object({
   taxId:       z.string().trim().max(40).nullable().optional(),
   note:        z.string().trim().max(1000).nullable().optional(),
   isActive:    z.boolean().optional(),
+  // Who to actually call. The owner is often not the person who answers: an
+  // adult child registers for a parent, a spouse handles viewings, an agent
+  // fronts for the owner. Blank means the owner is their own contact.
+  contactName:     z.string().trim().max(160).nullable().optional(),
+  contactPhone:    z.string().trim().max(40).nullable().optional(),
+  contactRelation: z.enum(['self', 'child', 'spouse', 'relative', 'agent', 'other']).nullable().optional(),
 })
 
 landlords.get('/', validate({ query: listQuery }), asyncHandler(async (req, res) => {

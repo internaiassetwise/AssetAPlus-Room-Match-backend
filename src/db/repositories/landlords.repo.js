@@ -5,6 +5,7 @@ const SELECT_LANDLORD = `
   SELECT
     id, full_name, phone, email, line_id,
     company_name, tax_id, note, source,
+    contact_name, contact_phone, contact_relation,
     is_active, created_at, updated_at
   FROM landlords
 `
@@ -41,12 +42,18 @@ export async function create(fields) {
     taxId = null,
     note = null,
     source = 'legacy',
+    // Who to actually call. Blank = the owner is their own contact.
+    contactName = null,
+    contactPhone = null,
+    contactRelation = null,
   } = fields
   const { rows } = await query(
-    `INSERT INTO landlords (full_name, phone, email, line_id, company_name, tax_id, note, source)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO landlords (full_name, phone, email, line_id, company_name, tax_id, note, source,
+                            contact_name, contact_phone, contact_relation)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING id`,
-    [fullName, phone, email, lineId, companyName, taxId, note, source],
+    [fullName, phone, email, lineId, companyName, taxId, note, source,
+     contactName, contactPhone, contactRelation],
   )
   return findById(rows[0].id)
 }
@@ -78,8 +85,11 @@ export async function update(id, fields) {
     lineId:      'line_id',
     companyName: 'company_name',
     taxId:       'tax_id',
-    note:        'note',
-    isActive:    'is_active',
+    note:            'note',
+    isActive:        'is_active',
+    contactName:     'contact_name',
+    contactPhone:    'contact_phone',
+    contactRelation: 'contact_relation',
   }
   for (const [k, v] of Object.entries(fields)) {
     if (v === undefined) continue
@@ -152,6 +162,9 @@ function rowToLandlord(row) {
     taxId: row.tax_id,
     note: row.note,
     source: row.source,
+    contactName: row.contact_name ?? null,
+    contactPhone: row.contact_phone ?? null,
+    contactRelation: row.contact_relation ?? null,
     isActive: row.is_active,
     roomCount: row.room_count ?? 0,
     availableRoomCount: row.available_room_count ?? 0,
