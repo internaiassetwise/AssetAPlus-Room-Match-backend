@@ -150,6 +150,124 @@ export async function list({ status, reason, limit = 100, offset = 0 } = {}) {
   return rows.map(shape)
 }
 
+/**
+ * Every conversation, not just the escalated ones.
+ *
+ * WHY: the inbox used to list admin_queue rows only, so a chat appeared solely
+ * once the bot gave up or the customer thought to press "ติดต่อแอดมิน". Most
+ * customers never do, so real conversations stayed invisible to admin. This
+ * lists one row per LINE user who has ever written in, with the escalated ones
+ * floated to the top.
+ *
+ * Source is line_webhook_log rather than chat_sessions: sessions expire after
+ * 24h and the maintenance sweep deletes them, which would silently drop
+ * yesterday's chats from the list. The log is kept for LOG_RETENTION_DAYS.
+ *
+ * @param {object} [opts]
+ * @param {number} [opts.limit]
+ * @param {'all'|'needs_admin'|'bot'} [opts.filter]
+ */
+export async function listConversations({ limit = 100, filter = 'all' } = {}) {
+  const { rows } = await query(
+    `WITH last_msg AS (
+       SELECT DISTINCT ON (line_user_id)
+              line_user_id, created_at,
+              COALESCE(
+                NULLIF(event::json->'message'->>'text', ''),
+                CASE WHEN event::json->'message'->>'type' = 'image' THEN '[ส่งรูปภาพ]' END,
+                CASE WHEN event_type = 'postback' THEN '[กดปุ่มในแชท]' END,
+                ''
+              ) AS last_text
+         FROM line_webhook_log
+        WHERE line_user_id IS NOT NULL
+          AND event_type IN ('message', 'postback')
+        ORDER BY line_user_id, created_at DESC
+     ), tix AS (
+       -- Prefer a still-open ticket; otherwise the most recent one.
+       SELECT DISTINCT ON (line_user_id)
+              line_user_id, id AS ticket_id, status, reason, summary
+         FROM admin_queue
+        ORDER BY line_user_id, (status = 'open') DESC, created_at DESC
+     )
+     SELECT m.line_user_id, m.created_at AS last_at, m.last_text,
+            t.ticket_id, t.status AS ticket_status, t.reason, t.summary,
+            COALESCE(
+              NULLIF(TRIM((SELECT full_name FROM tenants   WHERE line_id = m.line_user_id ORDER BY id LIMIT 1)), ''),
+              NULLIF(TRIM((SELECT full_name FROM landlords WHERE line_id = m.line_user_id ORDER BY id LIMIT 1)), '')
+            ) AS user_name
+       FROM last_msg m
+       LEFT JOIN tix t ON t.line_user_id = m.line_user_id
+      WHERE ($2::text = 'all'
+             OR ($2 = 'needs_admin' AND t.status = 'open')
+             OR ($2 = 'bot' AND (t.status IS NULL OR t.status <> 'open')))
+      ORDER BY (t.status = 'open') DESC NULLS LAST, m.created_at DESC
+      LIMIT $1`,
+    [Math.min(limit, 300), filter],
+  )
+  return rows.map((r) => ({
+    lineUserId:   r.line_user_id,
+    userName:     r.user_name,
+    lastText:     r.last_text,
+    lastAt:       r.last_at,
+    ticketId:     r.ticket_id,
+    ticketStatus: r.ticket_status,
+    reason:       r.reason,
+    summary:      r.summary,
+    needsAdmin:   r.ticket_status === 'open',
+  }))
+}
+
+/** Tallies for the conversation list's filter cards. */
+export async function countConversations() {
+  const { rows } = await query(
+    `WITH users AS (
+       SELECT DISTINCT line_user_id FROM line_webhook_log
+        WHERE line_user_id IS NOT NULL AND event_type IN ('message', 'postback')
+     ), tix AS (
+       SELECT DISTINCT ON (line_user_id) line_user_id, status
+         FROM admin_queue ORDER BY line_user_id, (status = 'open') DESC, created_at DESC
+     )
+     SELECT COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE t.status = 'open')::int AS needs_admin
+       FROM users u LEFT JOIN tix t ON t.line_user_id = u.line_user_id`,
+  )
+  const r = rows[0] || { total: 0, needs_admin: 0 }
+  return { total: r.total, needsAdmin: r.needs_admin, bot: r.total - r.needs_admin }
+}
+
+/** The user's still-open ticket, or null. */
+export async function findOpenByLineUser(lineUserId) {
+  const { rows } = await query(
+    `SELECT ${COLS}, ${NAME_EXPR} FROM admin_queue q
+      WHERE line_user_id = $1 AND status = 'open'
+      ORDER BY created_at DESC LIMIT 1`,
+    [lineUserId],
+  )
+  return shape(rows[0])
+}
+
+/**
+ * Get an open ticket for this user, creating one if none exists.
+ * Lets admin start a conversation with someone who never escalated — the reply
+ * / takeover machinery all hangs off a ticket id.
+ */
+export async function findOrCreateOpenTicket(lineUserId, { summary } = {}) {
+  const { rows } = await query(
+    `SELECT ${COLS} FROM admin_queue
+      WHERE line_user_id = $1 AND status = 'open'
+      ORDER BY created_at DESC LIMIT 1`,
+    [lineUserId],
+  )
+  if (rows[0]) return shape(rows[0])
+  const created = await query(
+    `INSERT INTO admin_queue (line_user_id, reason, summary, original_payload)
+     VALUES ($1, 'faq-miss', $2, '{}'::jsonb)
+     RETURNING ${COLS}`,
+    [lineUserId, summary || 'แอดมินเปิดคุยกับลูกค้าเอง'],
+  )
+  return shape(created.rows[0])
+}
+
 /** Counts per status — drives the inbox summary cards / badge. */
 export async function countByStatus() {
   const { rows } = await query(

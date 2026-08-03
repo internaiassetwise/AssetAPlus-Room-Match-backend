@@ -17,6 +17,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import * as repo from '../db/repositories/adminQueue.repo.js'
 import * as chatSessions from '../db/repositories/chatSessions.repo.js'
+import * as conversationStore from '../linebot/conversationStore.service.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate }     from '../middleware/validate.js'
 import { AppError }     from '../middleware/AppError.js'
@@ -74,6 +75,57 @@ adminInbox.get('/', requireAdmin, asyncHandler(async (req, res) => {
 
 adminInbox.get('/summary', requireAdmin, asyncHandler(async (_req, res) => {
   res.json(await repo.countByStatus())
+}))
+
+/**
+ * GET /conversations — EVERY user who has written in, not just escalations.
+ * Ones waiting on a human float to the top. See repo.listConversations for why
+ * this reads the webhook log instead of chat_sessions.
+ */
+adminInbox.get('/conversations', requireAdmin, asyncHandler(async (req, res) => {
+  const filter = ['all', 'needs_admin', 'bot'].includes(req.query.filter) ? req.query.filter : 'all'
+  const limit  = Math.min(300, Math.max(1, Number(req.query.limit) || 100))
+  const [items, summary] = await Promise.all([
+    repo.listConversations({ filter, limit }),
+    repo.countConversations(),
+  ])
+  const live = new Set(await chatSessions.listLive())
+  res.json({
+    items: items.map((c) => ({
+      ...c,
+      isLive: c.ticketId ? live.has(`${c.lineUserId}|${c.ticketId}`) : false,
+    })),
+    summary,
+  })
+}))
+
+/**
+ * GET /conversations/:lineUserId — the bot transcript for one user, so admin can
+ * read the context before stepping in. Falls back to an empty list once the
+ * 24h chat session has expired (the ticket thread, if any, still shows).
+ */
+adminInbox.get('/conversations/:lineUserId', requireAdmin, asyncHandler(async (req, res) => {
+  const lineUserId = String(req.params.lineUserId)
+  const [history, ticket] = await Promise.all([
+    conversationStore.loadHistory(lineUserId).catch(() => []),
+    repo.findOpenByLineUser(lineUserId).catch(() => null),
+  ])
+  res.json({ lineUserId, history: history || [], ticket: ticket ? await withLiveOne(ticket) : null })
+}))
+
+/**
+ * POST /conversations/:lineUserId/claim — start handling someone who never
+ * escalated. Creates a ticket if needed, then runs the normal takeover.
+ */
+adminInbox.post('/conversations/:lineUserId/claim', requireAdmin, asyncHandler(async (req, res) => {
+  const lineUserId = String(req.params.lineUserId)
+  const ticket = await repo.findOrCreateOpenTicket(lineUserId)
+  const admin  = req.admin?.displayName || req.admin?.username || req.admin?.id || null
+  await chatSessions.beginTakeover(lineUserId, { ticketId: ticket.id, adminId: admin })
+  resetBotRateLimit(lineUserId)
+  await pushToUser(lineUserId, NOTICE_TAKEOVER)
+  notifyAdminGroup(`🙋 @${admin || 'แอดมิน'} เปิดคุยกับลูกค้าเอง`)
+  res.json(await withLiveOne(await repo.findById(ticket.id)))
 }))
 
 adminInbox.get('/:id', requireAdmin, validate({ params: idParam }),
