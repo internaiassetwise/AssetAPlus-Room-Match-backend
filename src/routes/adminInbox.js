@@ -17,7 +17,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import * as repo from '../db/repositories/adminQueue.repo.js'
 import * as chatSessions from '../db/repositories/chatSessions.repo.js'
-import * as conversationStore from '../linebot/conversationStore.service.js'
+import * as lineLogs from '../db/repositories/lineLogs.repo.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate }     from '../middleware/validate.js'
 import { AppError }     from '../middleware/AppError.js'
@@ -100,17 +100,20 @@ adminInbox.get('/conversations', requireAdmin, asyncHandler(async (req, res) => 
 }))
 
 /**
- * GET /conversations/:lineUserId — the bot transcript for one user, so admin can
- * read the context before stepping in. Falls back to an empty list once the
- * 24h chat session has expired (the ticket thread, if any, still shows).
+ * GET /conversations/:lineUserId — the FULL transcript for one user.
+ *
+ * Rebuilt from the inbound + outbound LINE logs, not from chat_sessions.history:
+ * that history is the LLM's context window, so it omits stickers, the admin's own
+ * replies and the takeover/release notices, and it is wiped after 24h. Admins
+ * comparing this panel against LINE were seeing entire messages missing.
  */
 adminInbox.get('/conversations/:lineUserId', requireAdmin, asyncHandler(async (req, res) => {
   const lineUserId = String(req.params.lineUserId)
-  const [history, ticket] = await Promise.all([
-    conversationStore.loadHistory(lineUserId).catch(() => []),
+  const [transcript, ticket] = await Promise.all([
+    lineLogs.loadTranscript(lineUserId).catch(() => []),
     repo.findOpenByLineUser(lineUserId).catch(() => null),
   ])
-  res.json({ lineUserId, history: history || [], ticket: ticket ? await withLiveOne(ticket) : null })
+  res.json({ lineUserId, transcript: transcript || [], ticket: ticket ? await withLiveOne(ticket) : null })
 }))
 
 /**

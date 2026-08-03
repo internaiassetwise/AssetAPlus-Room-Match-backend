@@ -131,8 +131,12 @@ export async function pushMessage(lineUserId, messages) {
  *
  * @param {string} replyToken
  * @param {object[]|object} messages
+ * @param {string} [lineUserId]  Who we're replying to. Recorded in line_reply_log
+ *   so the admin inbox can attribute the message. This used to be logged as NULL,
+ *   which silently dropped every bot answer sent the free way — i.e. most of them
+ *   — out of the transcript the inbox rebuilds from the logs.
  */
-export async function replyMessage(replyToken, messages) {
+export async function replyMessage(replyToken, messages, lineUserId = null) {
   if (!replyToken) {
     throw new AppError(400, 'LINE_NO_REPLY_TOKEN',
       'replyMessage requires a non-empty replyToken')
@@ -142,7 +146,7 @@ export async function replyMessage(replyToken, messages) {
     method: 'POST',
     body: { replyToken, messages: msgs },
   })
-  await appendReply({ lineUserId: null, replyToken, message: { kind: 'reply', messages: msgs } })
+  await appendReply({ lineUserId, replyToken, message: { kind: 'reply', messages: msgs } })
   return result
 }
 
@@ -164,7 +168,7 @@ export async function replyOrPush(lineUserId, replyToken, messages) {
   if (!isConfigured()) return
   if (replyToken) {
     try {
-      await replyMessage(replyToken, msgs.slice(0, 5))
+      await replyMessage(replyToken, msgs.slice(0, 5), lineUserId)
       for (const m of msgs.slice(5)) {
         try { await pushMessage(lineUserId, m) } catch (err) { logger.error({ err, lineUserId }, 'line push failed (overflow)') }
       }
