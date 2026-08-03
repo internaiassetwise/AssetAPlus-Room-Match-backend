@@ -109,31 +109,23 @@ async function processEvent(ev, { handle, handleImage }) {
         }
       }
     } else if (eventType === 'message' && messageType === 'text') {
+      ensureKnownUser(lineUserId)   // fire-and-forget: never delay the reply
       if (await routeToLiveAgent(lineUserId, ev)) return // human owns the chat → skip the LLM
       if (await handOffIfFlooding(lineUserId, ev?.message?.text ?? '', replyToken)) return
       await handle(lineUserId, ev?.message?.text ?? '', replyToken)
     } else if (eventType === 'message' && messageType === 'image') {
+      ensureKnownUser(lineUserId)
       if (await routeToLiveAgent(lineUserId, ev)) return
       if (await handOffIfFlooding(lineUserId, '📷 (รูปภาพ)', replyToken)) return
       await handleImage(lineUserId, ev?.message?.id, replyToken)
     } else if (eventType === 'postback') {
+      ensureKnownUser(lineUserId)
       if (await routeToLiveAgent(lineUserId, ev)) return
       await handlePostback(lineUserId, ev?.postback?.data, replyToken)
     } else if (eventType === 'follow' && lineUserId) {
-      // New friend added the bot — find-or-create a tenant row so they appear
-      // in /admin/tenants immediately. Fetch their display name from Line so
-      // the admin sees a real name instead of "Line user xxx".
+      // New friend added the bot — make sure we know who they are.
       try {
-        let tenant = await findTenantByLineId(lineUserId)
-        if (!tenant) tenant = await createTenantFromBot(lineUserId)
-        // Refresh name + picture from Line profile (only fills placeholder names).
-        if (lineMessaging.isConfigured()) {
-          const profile = await lineMessaging.getProfile(lineUserId).catch(() => null)
-          if (profile) {
-            const { refreshFromLine } = await import('../db/repositories/tenants.repo.js')
-            await refreshFromLine(tenant.id, { displayName: profile.displayName, pictureUrl: profile.pictureUrl })
-          }
-        }
+        await ensureKnownUser(lineUserId)
       } catch (err) {
         logger.error({ err, lineUserId }, 'follow: failed to create tenant row')
       }
@@ -143,6 +135,55 @@ async function processEvent(ev, { handle, handleImage }) {
     // 'unfollow','leave', etc. → no-op (audit-logged above)
   } catch (err) {
     logger.error({ err, lineUserId, eventType, messageType }, 'webhook dispatch failed')
+  }
+}
+
+// A tenant stub is named "Line user <first 8 of id>" until the real LINE display
+// name lands. Anything matching this is still a placeholder worth replacing.
+const PLACEHOLDER_NAME = /^Line user /i
+
+/**
+ * Make sure we have a row (and a real display name) for this LINE user.
+ *
+ * WHY: the admin inbox resolves a name from tenants/landlords by line_id. Rows
+ * were only ever created on the `follow` event, so anyone who added the bot
+ * before that code existed — or whose follow event we missed — stayed unknown
+ * and showed up in the inbox as a raw "Ufb79e53…" id.
+ *
+ * Called on every 1:1 event, so it must stay cheap:
+ *   • one indexed lookup; if a real name is already stored, it stops there
+ *   • the LINE profile call only happens for a brand-new or still-placeholder
+ *     row, and getProfile is itself cached for 5 minutes
+ *
+ * Fire-and-forget at the call sites — never let this delay a customer's reply.
+ * Landlord-only users are left alone: they already have a landlords row, and
+ * the inbox falls back to that name.
+ */
+async function ensureKnownUser(lineUserId) {
+  if (!lineUserId) return
+  try {
+    let tenant = await findTenantByLineId(lineUserId)
+    if (tenant && !PLACEHOLDER_NAME.test(tenant.full_name || '')) return  // already named
+
+    // Don't shadow a landlord who has a proper name and no tenant row.
+    if (!tenant) {
+      const { findByLineId: findLandlordByLineId } = await import('../db/repositories/landlords.repo.js')
+      const landlord = await findLandlordByLineId(lineUserId).catch(() => null)
+      if (landlord && !PLACEHOLDER_NAME.test(landlord.fullName || landlord.full_name || '')) return
+      tenant = await createTenantFromBot(lineUserId)
+    }
+
+    if (!lineMessaging.isConfigured()) return
+    const profile = await lineMessaging.getProfile(lineUserId).catch(() => null)
+    if (!profile?.displayName) return
+    const { refreshFromLine } = await import('../db/repositories/tenants.repo.js')
+    await refreshFromLine(tenant.id, {
+      displayName: profile.displayName,
+      pictureUrl:  profile.pictureUrl,
+    })
+    logger.info({ lineUserId, name: profile.displayName }, 'captured line display name')
+  } catch (err) {
+    logger.error({ err, lineUserId }, 'ensureKnownUser failed')
   }
 }
 
