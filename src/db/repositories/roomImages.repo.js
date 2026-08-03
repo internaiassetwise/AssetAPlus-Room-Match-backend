@@ -8,22 +8,64 @@ import { query } from '../pool.js'
 
 export async function create(roomId, url, fileName, opts = {}) {
   const { altText = null, sortOrder = null } = opts
-  // If sortOrder is null, put new image last.
-  let order = sortOrder
-  if (order === null) {
-    const { rows } = await query(
-      'SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM room_images WHERE room_id = $1',
-      [roomId],
-    )
-    order = rows[0].next
-  }
+  // "Next position" is computed INSIDE the insert. It used to be a separate
+  // SELECT followed by an INSERT, so two uploads landing on the same room at
+  // once — an admin adding photos while the landlord sends more over LINE —
+  // could both read the same MAX and take the same slot, leaving an order that
+  // depends on row id rather than on what anyone chose.
   const { rows } = await query(
     `INSERT INTO room_images (room_id, url, alt_text, sort_order)
-     VALUES ($1, $2, $3, $4)
+     SELECT $1, $2, $3,
+            COALESCE($4::int,
+                     (SELECT COALESCE(MAX(sort_order), -1) + 1
+                        FROM room_images WHERE room_id = $1))
      RETURNING id, room_id, url, alt_text, sort_order, created_at`,
-    [roomId, url, altText, order],
+    [roomId, url, altText, sortOrder],
   )
   return rowToImage(rows[0])
+}
+
+/**
+ * Rewrite the gallery order for one room.
+ *
+ * `ids` is the full desired order, first = cover. Ids that don't belong to the
+ * room are ignored, and any photo the caller left out keeps its place at the
+ * end — so a stale client tab can't silently drop a photo from the gallery.
+ * Runs as one statement so a half-applied order is never visible.
+ *
+ * @returns {Promise<Array>} the room's photos in their new order
+ */
+export async function reorder(roomId, ids) {
+  const clean = (Array.isArray(ids) ? ids : [])
+    .map(Number)
+    .filter((n) => Number.isInteger(n) && n > 0)
+  if (!clean.length) return findByRoom(roomId)
+
+  // One statement renumbers the WHOLE gallery: listed photos take the caller's
+  // order, anything left out keeps its relative position after them. Doing it
+  // in two passes would leave the gallery briefly holding duplicate positions,
+  // which is exactly what a concurrent read would pick up.
+  await query(
+    `WITH desired AS (
+       SELECT id, (ordinality - 1)::int AS idx
+         FROM unnest($2::bigint[]) WITH ORDINALITY AS t(id, ordinality)
+     ), ranked AS (
+       SELECT ri.id,
+              (ROW_NUMBER() OVER (
+                 ORDER BY COALESCE(d.idx, 1000000) ASC, ri.sort_order ASC, ri.id ASC
+               ) - 1)::int AS pos
+         FROM room_images ri
+         LEFT JOIN desired d ON d.id = ri.id
+        WHERE ri.room_id = $1
+     )
+     UPDATE room_images ri
+        SET sort_order = ranked.pos
+       FROM ranked
+      WHERE ri.id = ranked.id
+        AND ri.sort_order IS DISTINCT FROM ranked.pos`,
+    [roomId, clean],
+  )
+  return findByRoom(roomId)
 }
 
 export async function findByRoom(roomId, { limit = 50 } = {}) {

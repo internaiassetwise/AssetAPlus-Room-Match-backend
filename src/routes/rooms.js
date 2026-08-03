@@ -220,6 +220,21 @@ rooms.delete('/:id/photos/:photoId', requireAdmin,
   }),
 )
 
+/**
+ * PUT /:id/photos/order — admin reorders the gallery. Body: { ids: [photoId, …] }
+ * in the desired order, first = cover photo. Photos left out of the list keep
+ * their relative position after the listed ones, so a stale tab can't drop one.
+ */
+rooms.put('/:id/photos/order', requireAdmin,
+  validate({
+    params: idParam,
+    body: z.object({ ids: z.array(z.coerce.number().int().positive()).max(50) }),
+  }),
+  asyncHandler(async (req, res) => {
+    res.json(await roomImages.reorder(req.params.id, req.body.ids))
+  }),
+)
+
 // ----- Admin approval actions (Phase 5) ------------------------------------
 
 rooms.post('/:id/approve', requireAdmin, validate({ params: idParam }),
