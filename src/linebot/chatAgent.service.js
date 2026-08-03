@@ -107,7 +107,7 @@ export async function runOnce(lineUserId, text) {
   line.startLoading?.(lineUserId, 20).catch(() => {})
 
   const { history } = await store.append(lineUserId, 'user', trimmed)
-  const { reply: rawReply, pushes } = await runAgentLoop({ lineUserId, history })
+  const { reply: rawReply, pushes, failure } = await runAgentLoop({ lineUserId, history })
   // Sanitise BEFORE storing + returning: Line renders plain text, so markdown
   // (**bold**, *italic*, # heading, `code`, list markers) shows literally.
   // Strip it deterministically — the model keeps slipping `**` back in despite
@@ -130,9 +130,22 @@ export async function runOnce(lineUserId, text) {
   // alternating and each question is answered on its own.
   const fallback = pushes.length
     ? 'เสร็จเรียบร้อยค่ะ แต่น้องห้องตอบข้อความไม่ได้ชั่วคราว หากมีปัญหาแจ้งได้นะคะ'
-    : 'ขออภัยค่ะ ระบบตอบกลับไม่ได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง'
-  logger.warn({ lineUserId, inLen: trimmed.length, pushes: pushes.length }, 'agent loop returned no reply — stored fallback turn')
+    : 'ขออภัยค่ะ น้องห้องตอบให้ไม่ได้ในขณะนี้ 🙏 ส่งเรื่องให้แอดมินดูแลต่อให้แล้วนะคะ เดี๋ยวมีคนมาตอบค่ะ'
+  logger.warn(
+    { lineUserId, inLen: trimmed.length, pushes: pushes.length, failure },
+    'agent loop returned no reply — stored fallback turn',
+  )
   await store.append(lineUserId, 'assistant', fallback)
+  // A dead turn used to end here: the customer was told "try again" and NOBODY
+  // knew it happened. Raise a ticket instead — the chat then sits at the top of
+  // the admin inbox as รอแอดมิน, so a human closes the loop even if the bot
+  // never recovers. Best-effort: a failing alert must not mask the reply.
+  alertAdmins({
+    lineUserId,
+    reason:  'system-error',
+    summary: `บอทตอบไม่ได้ — "${trimmed.slice(0, 80)}"`,
+    originalPayload: { text: trimmed, failure: failure ?? null },
+  }).catch((err) => logger.error({ err, lineUserId }, 'failed to escalate dead bot turn'))
   return { reply: fallback, pushes, status: 'ok', fallback: true }
 }
 
@@ -228,7 +241,7 @@ export async function handle(lineUserId, text, replyToken = null) {
       ...r.pushes,
       r.pushes.length
         ? 'เสร็จเรียบร้อยค่ะ แต่น้องห้องตอบข้อความไม่ได้ชั่วคราว หากมีปัญหาแจ้งได้นะคะ'
-        : 'ขออภัยค่ะ ระบบตอบกลับไม่ได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง',
+        : 'ขออภัยค่ะ น้องห้องตอบให้ไม่ได้ในขณะนี้ 🙏 ส่งเรื่องให้แอดมินดูแลต่อให้แล้วนะคะ เดี๋ยวมีคนมาตอบค่ะ',
     ])
     return null
   }
@@ -300,9 +313,26 @@ async function runAgentLoop({ lineUserId, history }) {
     timings.rounds = round + 1
 
     if (!turn.ok) {
-      logger.warn({ lineUserId, status: turn.status, error: turn.error, round }, 'chatTurn failed in loop')
+      logger.warn(
+        { lineUserId, status: turn.status, error: turn.error, detail: turn.detail, round },
+        'chatTurn failed in loop',
+      )
+      // Last resort before the user sees an error: ask again with NO tools and
+      // only the plain-text history. That request shape is minimal — no tool
+      // declarations, no functionCall/functionResponse parts, no thoughtSignature
+      // echo — so it survives the failure modes that make a tools turn 400. The
+      // user gets a real (if tool-less) answer instead of "ระบบตอบกลับไม่ได้".
+      const tPlain = Date.now()
+      const plain = await gemini.chatTurn({ contents: buildContents(history) })
+      timings.llmMs += Date.now() - tPlain
+      timings.tools.push('no-tools-fallback')
+      if (plain.ok && plain.text && plain.text.trim()) {
+        logger.info({ lineUserId, round }, 'recovered via no-tools fallback turn')
+        emitTimings()
+        return { reply: plain.text.trim(), pushes }
+      }
       emitTimings()
-      return { reply: null, pushes }
+      return { reply: null, pushes, failure: { status: turn.status, detail: turn.detail } }
     }
 
     const fcs = Array.isArray(turn.functionCalls) ? turn.functionCalls : []

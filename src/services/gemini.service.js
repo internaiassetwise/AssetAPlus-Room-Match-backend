@@ -44,6 +44,13 @@ const isEnabled = () => !!config.GOOGLE_GEMINI_API_KEY
 // instead of failing the user's turn. Non-retryable statuses (400/401/403/404…)
 // return immediately so each caller handles them exactly as before.
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504])
+// 400 INVALID_ARGUMENT is *usually* a permanent request-shape bug, but Gemini
+// also emits it transiently — a customer's turn died in ~1s (too fast to be any
+// retryable status, whose backoff alone takes ~3.5s) and the identical call
+// replayed 8x afterwards with no failure. One extra attempt costs ~1s on a
+// genuinely malformed request and rescues the transient case, so it is worth it.
+// Capped at a single retry: a real 400 must not spin through the full ladder.
+const RETRY_ONCE_STATUS = new Set([400])
 const MAX_ATTEMPTS = 4          // 1 initial attempt + up to 3 retries
 const MAX_BACKOFF_MS = 4000
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -71,7 +78,11 @@ export async function geminiFetch(url, bodyStr, tag) {
         body:    bodyStr,
         signal:  AbortSignal.timeout(TIMEOUT_MS),
       })
-      if (resp.ok || !RETRYABLE_STATUS.has(resp.status)) return resp
+      // Retry transient statuses on every attempt; retry the "usually permanent"
+      // ones exactly once (see RETRY_ONCE_STATUS).
+      const mayRetry = RETRYABLE_STATUS.has(resp.status)
+        || (RETRY_ONCE_STATUS.has(resp.status) && attempt === 1)
+      if (resp.ok || !mayRetry) return resp
       lastResp = resp
       lastErr = null
       logger.warn(
@@ -312,7 +323,9 @@ export async function chatTurn({ contents, tools, toolConfig, generationConfig }
     if (!resp.ok) {
       const text = await resp.text().catch(() => '')
       logger.error({ status: resp.status, body: text.slice(0, 500) }, 'gemini chatTurn failed')
-      return { ok: false, status: resp.status, error: `gemini ${resp.status}` }
+      // Carry the body up: the caller alerts admins, and knowing WHICH 400 it was
+      // ("Unknown name", quota, bad thoughtSignature…) is the whole diagnosis.
+      return { ok: false, status: resp.status, error: `gemini ${resp.status}`, detail: text.slice(0, 300) }
     }
     const json   = await resp.json()
     const cand   = json?.candidates?.[0] ?? {}
