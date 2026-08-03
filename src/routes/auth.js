@@ -456,6 +456,11 @@ auth.get('/azure/start', asyncHandler(async (req, res) => {
     state,
     code_challenge:        codeChallenge,
     code_challenge_method: 'S256',
+    // Always show the account picker. Without this, Microsoft silently reuses
+    // whichever account the browser is already signed into — so anyone with a
+    // personal and a work account (or an admin covering for a colleague) gets
+    // logged in as the wrong one with no way to notice or switch.
+    prompt:                'select_account',
   })
   // Store PKCE verifier + return path server-side, keyed by the state value
   // that Azure echoes back in the callback URL. No cookies needed — avoids
