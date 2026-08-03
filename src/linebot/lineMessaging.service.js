@@ -191,6 +191,35 @@ export async function replyOrPush(lineUserId, replyToken, messages) {
  * @param {string} lineUserId
  * @returns {Promise<{displayName: string, userId: string, language?: string, pictureUrl?: string, statusMessage?: string}>}
  */
+/**
+ * The OA's public "basic id" (e.g. "@973rjazt"), used to build the
+ * line.me/R/oaMessage link that opens a chat with a pre-filled question.
+ *
+ * Discovered from /v2/bot/info rather than added as another env var — the
+ * channel token we already hold identifies exactly one OA, so a separate
+ * setting could only ever be redundant or wrong. Cached for an hour; it changes
+ * roughly never. Returns null when LINE isn't configured or is unreachable, and
+ * every caller treats that as "no LINE link available" rather than an error.
+ */
+let botInfoCache = null   // { basicId, fetchedAt }
+const BOT_INFO_TTL_MS = 60 * 60_000
+
+export async function getBotBasicId() {
+  if (!isConfigured()) return null
+  if (botInfoCache && Date.now() - botInfoCache.fetchedAt < BOT_INFO_TTL_MS) {
+    return botInfoCache.basicId
+  }
+  try {
+    const res = await lineFetch(config.LINE_API_BASE_URL, '/info', { method: 'GET' })
+    const basicId = res?.basicId || null
+    if (basicId) botInfoCache = { basicId, fetchedAt: Date.now() }
+    return basicId
+  } catch (err) {
+    logger.warn({ err: err.message }, 'could not read LINE bot info (basicId)')
+    return null
+  }
+}
+
 const profileCache = new Map()        // userId → {profile, fetchedAt}
 const PROFILE_TTL_MS = 5 * 60_000
 

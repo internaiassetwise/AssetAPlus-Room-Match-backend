@@ -14,6 +14,9 @@ import { requireAdmin } from '../middleware/requireAdmin.js'
 import { logger } from '../logger.js'
 import { UPLOADS_DIR } from '../config.js'
 import * as lineMessaging from '../linebot/lineMessaging.service.js'
+import { makeRoomRef } from '../services/roomRef.js'
+import { getBotBasicId } from '../linebot/lineMessaging.service.js'
+import { maskRoomCode, maskCodeInText } from '../linebot/roomCode.js'
 
 export const rooms = Router()
 
@@ -219,6 +222,41 @@ rooms.delete('/:id/photos/:photoId', requireAdmin,
     res.status(204).end()
   }),
 )
+
+/**
+ * GET /:id/ask-link — the "สอบถามห้องนี้" link for a room page. PUBLIC.
+ *
+ * Returns a line.me URL that opens a chat with our OA and the question already
+ * typed, carrying a signed tag naming this room. When the customer sends it,
+ * the webhook records the interest and strips the tag, so admin opens the chat
+ * already knowing which room it is about — the thing they previously had to ask.
+ *
+ * The room NUMBER stays masked in the visible text: this message is something
+ * the customer sees and forwards.
+ */
+rooms.get('/:id/ask-link', validate({ params: idParam }), asyncHandler(async (req, res) => {
+  const room = await repo.findById(req.params.id)
+  if (!room || room.status !== 'available') {
+    throw new AppError(404, 'ROOM_NOT_FOUND', 'ไม่พบห้องนี้')
+  }
+  const basicId = await getBotBasicId()
+  if (!basicId) {
+    // LINE not configured / unreachable — the page hides the button rather
+    // than showing one that goes nowhere.
+    return res.json({ available: false, url: null, text: null })
+  }
+  const label = maskCodeInText(room.title, room.roomCode) || 'ห้องนี้'
+  const code  = maskRoomCode(room.roomCode)
+  // Admins often put the unit number in the title, so appending it again reads
+  // as "Kave Pop Salaya - A07xx (ห้อง A07xx)". Only add it when it's missing.
+  const suffix = code && !label.includes(code) ? ` (ห้อง ${code})` : ''
+  const text = `สนใจสอบถามห้อง ${label}${suffix} ค่ะ/ครับ (${makeRoomRef(room.id)})`
+  res.json({
+    available: true,
+    url: `https://line.me/R/oaMessage/${encodeURIComponent(basicId)}/?${encodeURIComponent(text)}`,
+    text,
+  })
+}))
 
 /**
  * PUT /:id/photos/order — admin reorders the gallery. Body: { ids: [photoId, …] }

@@ -18,6 +18,7 @@ import { z } from 'zod'
 import * as repo from '../db/repositories/adminQueue.repo.js'
 import * as chatSessions from '../db/repositories/chatSessions.repo.js'
 import * as lineLogs from '../db/repositories/lineLogs.repo.js'
+import * as roomInterest from '../db/repositories/roomInterest.repo.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate }     from '../middleware/validate.js'
 import { AppError }     from '../middleware/AppError.js'
@@ -109,11 +110,19 @@ adminInbox.get('/conversations', requireAdmin, asyncHandler(async (req, res) => 
  */
 adminInbox.get('/conversations/:lineUserId', requireAdmin, asyncHandler(async (req, res) => {
   const lineUserId = String(req.params.lineUserId)
-  const [transcript, ticket] = await Promise.all([
+  const [transcript, ticket, room] = await Promise.all([
     lineLogs.loadTranscript(lineUserId).catch(() => []),
     repo.findOpenByLineUser(lineUserId).catch(() => null),
+    // Which room they tapped "สอบถามห้องนี้" on, if any — so admin opens the
+    // chat already knowing what it's about instead of having to ask.
+    roomInterest.latestForUser(lineUserId).catch(() => null),
   ])
-  res.json({ lineUserId, transcript: transcript || [], ticket: ticket ? await withLiveOne(ticket) : null })
+  res.json({
+    lineUserId,
+    transcript: transcript || [],
+    ticket: ticket ? await withLiveOne(ticket) : null,
+    room,
+  })
 }))
 
 /**

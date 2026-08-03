@@ -26,6 +26,8 @@ import * as chatSessions from '../db/repositories/chatSessions.repo.js'
 import * as adminQueue from '../db/repositories/adminQueue.repo.js'
 import { enqueue } from './dispatchQueue.service.js'
 import { consume as consumeRate } from './botRateLimit.service.js'
+import { parseRoomRef, stripRoomRef } from '../services/roomRef.js'
+import * as roomInterest from '../db/repositories/roomInterest.repo.js'
 
 const SIGNATURE_HEADER = 'x-line-signature'
 
@@ -110,9 +112,14 @@ async function processEvent(ev, { handle, handleImage }) {
       }
     } else if (eventType === 'message' && messageType === 'text') {
       ensureKnownUser(lineUserId)   // fire-and-forget: never delay the reply
-      if (await routeToLiveAgent(lineUserId, ev)) return // human owns the chat → skip the LLM
-      if (await handOffIfFlooding(lineUserId, ev?.message?.text ?? '', replyToken)) return
-      await handle(lineUserId, ev?.message?.text ?? '', replyToken)
+      // A message sent from a room page carries a signed tag naming that room.
+      // Record it and strip it, so admin and the bot both know what "ห้องนี้"
+      // means and the customer never sees the plumbing in their own chat.
+      const raw  = ev?.message?.text ?? ''
+      const text = await noteRoomInterest(lineUserId, raw)
+      if (await routeToLiveAgent(lineUserId, { ...ev, message: { ...ev.message, text } })) return
+      if (await handOffIfFlooding(lineUserId, text, replyToken)) return
+      await handle(lineUserId, text, replyToken)
     } else if (eventType === 'message' && messageType === 'image') {
       ensureKnownUser(lineUserId)
       if (await routeToLiveAgent(lineUserId, ev)) return
@@ -136,6 +143,28 @@ async function processEvent(ev, { handle, handleImage }) {
   } catch (err) {
     logger.error({ err, lineUserId, eventType, messageType }, 'webhook dispatch failed')
   }
+}
+
+/**
+ * If the message carries a room tag, record the interest and return the message
+ * without it. Returns the original text unchanged when there is no tag, or when
+ * recording fails — knowing the room is a bonus, never a precondition for
+ * answering someone.
+ */
+async function noteRoomInterest(lineUserId, text) {
+  const roomId = parseRoomRef(text)
+  if (!roomId) return text
+  try {
+    await roomInterest.record({ lineUserId, roomId, source: 'web-cta' })
+    logger.info({ lineUserId, roomId }, 'room interest recorded from web CTA')
+  } catch (err) {
+    // A bad room id (deleted room) trips the FK — not worth failing the turn.
+    logger.warn({ err: err.message, lineUserId, roomId }, 'room interest not recorded')
+  }
+  const stripped = stripRoomRef(text)
+  // An empty result means the tag WAS the whole message (the customer sent the
+  // pre-filled text untouched); give the bot something to answer.
+  return stripped || 'สนใจห้องนี้ค่ะ'
 }
 
 // A tenant stub is named "Line user <first 8 of id>" until the real LINE display
