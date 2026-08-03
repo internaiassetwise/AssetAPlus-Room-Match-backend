@@ -35,6 +35,7 @@ import { rateLimit } from '../middleware/rateLimit.js'
 import { googleClient, azureClient } from '../auth/oidc.js'
 import { signState, verifyState } from '../auth/stateToken.js'
 import { save as saveOidcState, take as takeOidcState } from '../auth/oidcStateStore.js'
+import { stash as stashHandoff, redeem as redeemHandoff, isFrontendOrigin } from '../auth/loginHandoff.js'
 import {
   USER_COOKIE, LANDLORD_COOKIE,
   oidcCookieStore, sanitizeReturn, flushOidcCookies,
@@ -52,6 +53,36 @@ export const auth = Router()
  */
 function setSessionCookie(res, name, token, expiresAt) {
   res.cookie(name, token, sessionCookieOptions({ expires: expiresAt }))
+}
+
+/** The frontend's origin, or '' when it is served from this same host. */
+function webOrigin() {
+  return (config.WEB_BASE_URL || config.APP_BASE_URL || '').replace(/\/+$/, '')
+}
+
+/**
+ * Finish an OAuth login: put the session cookies where the browser will
+ * actually send them back, then redirect into the app.
+ *
+ * An OAuth callback lands on whatever redirect_uri the provider has registered
+ * — for us, the API's own host. A cookie set there belongs to the API host and
+ * is never sent to the frontend host, so the user lands back looking logged
+ * out. When the callback is running on a different host from the frontend we
+ * therefore park the cookies and hand the frontend a one-time code to redeem
+ * on its own origin (see auth/loginHandoff.js). Same-host callbacks — dev, or a
+ * deploy whose redirect_uri points at the frontend — set the cookies directly.
+ *
+ * @param {Array<{name:string, token:string, expiresAt:Date}>} cookies
+ */
+function finishLogin(req, res, cookies, returnTo = '/') {
+  const origin = webOrigin()
+  if (isFrontendOrigin(req, origin)) {
+    for (const c of cookies) setSessionCookie(res, c.name, c.token, c.expiresAt)
+    return res.redirect(frontendUrl(returnTo))
+  }
+  const code = stashHandoff(cookies, returnTo)
+  logger.info({ host: req.headers.host, origin, returnTo }, 'login handoff issued')
+  return res.redirect(`${origin}/auth/handoff?code=${encodeURIComponent(code)}`)
 }
 
 /**
@@ -372,17 +403,18 @@ auth.get('/line/callback', asyncHandler(async (req, res) => {
   if (tenant)   await tenants.refreshFromLine(tenant.id, lineProfile)
   if (landlord) await landlords.refreshFromLine(landlord.id, lineProfile)
 
+  const cookies = []
   if (tenant) {
     const s = await userSessions.createUserSession(tenant.id)
-    setSessionCookie(res, USER_COOKIE, s.token, s.expiresAt)
+    cookies.push({ name: USER_COOKIE, token: s.token, expiresAt: s.expiresAt })
   }
   if (landlord) {
     const s = await landlordSessions.createLandlordSession(landlord.id)
-    setSessionCookie(res, LANDLORD_COOKIE, s.token, s.expiresAt)
+    cookies.push({ name: LANDLORD_COOKIE, token: s.token, expiresAt: s.expiresAt })
   }
 
   logger.info({ lineUserId, tenant: !!tenant, landlord: !!landlord }, 'line login succeeded')
-  res.redirect(frontendUrl(returnTo))
+  return finishLogin(req, res, cookies, returnTo)
 }))
 
 // ───────────────────────────── Azure OIDC (admin) ────────────────────────────
@@ -483,8 +515,7 @@ auth.get('/azure/callback', asyncHandler(async (req, res) => {
     })
     const { token, expiresAt } = await admins.createSession(admin.id)
     await admins.touchLastLogin(admin.id)
-    setSessionCookie(res, ADMIN_COOKIE, token, expiresAt)
-    res.redirect(frontendUrl(stored.returnTo || '/admin'))
+    return finishLogin(req, res, [{ name: ADMIN_COOKIE, token, expiresAt }], stored.returnTo || '/admin')
   } catch (err) {
     // Surface the real error message directly so it's visible without
     // digging through Railway structured logs.
@@ -494,6 +525,35 @@ auth.get('/azure/callback', asyncHandler(async (req, res) => {
     const message = err.message || String(err)
     res.status(status).json({ ok: false, error: { code, message }, requestId: req.id })
   }
+}))
+
+// ─────────────────────────── Login handoff redeem ───────────────────────────
+//
+// The other half of finishLogin(): the frontend calls this on ITS OWN origin
+// (through the /api proxy), so the Set-Cookie here binds to the host the user
+// is actually browsing. Rate-limited and single-use — see auth/loginHandoff.js
+// for why the code exists at all.
+
+auth.post('/handoff', rateLimit({ windowMs: 60_000, max: 20 }), asyncHandler(async (req, res) => {
+  // CSRF hardening: a JSON content-type can't come from a plain cross-site form
+  // post, and the origin must be one we serve. The code is single-use and lives
+  // 60s, but neither should be the only thing standing between a leaked code
+  // and a session.
+  const ct = String(req.headers['content-type'] || '').toLowerCase()
+  if (!ct.includes('application/json')) return res.status(415).end()
+  if (!originMatchesCORS(req)) {
+    throw new AppError(403, 'ORIGIN_BLOCKED', 'Origin not allowed')
+  }
+
+  const stored = redeemHandoff(typeof req.body?.code === 'string' ? req.body.code : null)
+  if (!stored) {
+    // Expired, already used, or never existed — all the same to the caller.
+    throw new AppError(400, 'HANDOFF_INVALID',
+      'ลิงก์เข้าสู่ระบบหมดอายุแล้ว กรุณาเข้าสู่ระบบใหม่อีกครั้ง')
+  }
+  for (const c of stored.cookies) setSessionCookie(res, c.name, c.token, c.expiresAt)
+  logger.info({ cookies: stored.cookies.map((c) => c.name) }, 'login handoff redeemed')
+  res.json({ ok: true, next: sanitizeReturn(stored.returnTo) || '/' })
 }))
 
 // ───────────────────────────── Mock login (dev only) ────────────────────────
