@@ -10,7 +10,8 @@ import { resizeForWeb } from '../services/imageResize.service.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate } from '../middleware/validate.js'
 import { AppError } from '../middleware/AppError.js'
-import { requireAdmin } from '../middleware/requireAdmin.js'
+import { requireAdmin, readCookie, ADMIN_COOKIE } from '../middleware/requireAdmin.js'
+import { findSession as findAdminSession } from '../db/repositories/admins.repo.js'
 import { logger } from '../logger.js'
 import { UPLOADS_DIR } from '../config.js'
 import * as lineMessaging from '../linebot/lineMessaging.service.js'
@@ -74,7 +75,10 @@ const idParam = z.object({ id: z.coerce.number().int().positive() })
 const slotBody = z.object({ startsAt: z.string().refine((v) => !Number.isNaN(Date.parse(v)), { message: 'รูปแบบวันที่ไม่ถูกต้อง' }) })
 
 rooms.get('/', validate({ query: listQuery }), asyncHandler(async (req, res) => {
-  res.json((await repo.findAvailable(req.query)).map(publicRoom))
+  // Explicit arrow, NOT .map(publicRoom): map passes (item, index, array), so
+  // the index would land in the isAdmin slot and every room after the first
+  // would keep its internal fields.
+  res.json((await repo.findAvailable(req.query)).map((r) => publicRoom(r)))
 }))
 
 // ----- Admin approval flow (Phase 5) — /pending before /:id ---------------
@@ -90,7 +94,7 @@ rooms.get('/:id', validate({ params: idParam }), asyncHandler(async (req, res) =
   // Attach the full photo gallery (room_images, sorted). `room.image` is only
   // the first photo; the gallery + lightbox need the whole set.
   const photos = (await roomImages.findByRoom(req.params.id)).map((p) => p.url)
-  res.json({ ...publicRoom(room), photos })
+  res.json({ ...publicRoom(room, await peekAdmin(req)), photos })
 }))
 
 /**
@@ -98,10 +102,27 @@ rooms.get('/:id', validate({ params: idParam }), asyncHandler(async (req, res) =
  * reader: the landlord's Line userId (createdByLineUserId) is an identity key,
  * and approvedBy leaks an admin username. Admin routes still get the full row.
  */
-function publicRoom(room) {
+function publicRoom(room, isAdmin = false) {
   if (!room) return room
-  const { createdByLineUserId, approvedBy, ...rest } = room
-  return rest
+  const { createdByLineUserId, approvedBy, landlordId, ...rest } = room
+  // landlordId is an internal FK. Anonymous readers don't get it; the admin
+  // room form does, because it needs to preselect the owner.
+  return isAdmin ? { ...rest, landlordId } : rest
+}
+
+/**
+ * Resolve an admin session WITHOUT rejecting anonymous callers. GET /rooms/:id
+ * serves both the public site and the admin edit form, and only the latter may
+ * see the owner.
+ */
+async function peekAdmin(req) {
+  try {
+    const token = readCookie(req, ADMIN_COOKIE)
+    if (!token) return false
+    return Boolean(await findAdminSession(token))
+  } catch {
+    return false
+  }
 }
 
 // ----- Viewing slots (Phase 6) ---------------------------------------------

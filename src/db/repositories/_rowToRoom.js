@@ -6,6 +6,11 @@ export function rowToRoom(row) {
   const amenities = Array.isArray(row.amenities) ? row.amenities : []
   return {
     id: row.id,
+    // The owning landlord. SELECT_ROOM has always fetched landlord_id but this
+    // mapper dropped it, so the admin edit form loaded with an empty owner field
+    // on a room that plainly has one — and the form's own validation then
+    // silently blocked saving. publicRoom() strips it for anonymous readers.
+    landlordId: row.landlord_id ?? null,
     title: row.title,
     description: row.description,
     propertyType: row.property_type,
