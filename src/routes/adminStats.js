@@ -41,7 +41,12 @@ adminStats.get('/', requireAdmin, asyncHandler(async (_req, res) => {
         (SELECT COUNT(*) FROM rooms WHERE status = 'pending')::int         AS rooms_pending,
         (SELECT COUNT(*) FROM tenants)::int                                AS tenants,
         (SELECT COUNT(*) FROM landlords)::int                              AS landlords,
-        (SELECT COUNT(*) FROM admin_queue WHERE status = 'open')::int      AS inbox_open,
+        -- DISTINCT line_user_id, not COUNT(*) of tickets. The inbox became
+        -- conversation-centric (one row per person) and this card links there,
+        -- so counting tickets meant clicking "5" landed on a list of 2 — one
+        -- customer can leave four open tickets behind.
+        (SELECT COUNT(DISTINCT line_user_id) FROM admin_queue
+          WHERE status = 'open')::int                                      AS inbox_open,
         (SELECT COUNT(*) FROM viewings
           WHERE scheduled_for BETWEEN NOW() AND NOW() + INTERVAL '7 days'
             AND status <> 'cancelled')::int                                AS viewings_week
