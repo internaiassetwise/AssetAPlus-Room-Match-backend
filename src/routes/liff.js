@@ -398,7 +398,7 @@ liff.get('/listing', (req, res) => {
 //   GET  /ask?roomId=123   — the page (auto-submits, no UI to speak of)
 //   POST /ask/record       — { roomId } + X-Liff-Token → records room_interest
 
-function renderAskHtml(liffId, recordUrl, roomId, roomLabel, oaBasicId) {
+function renderAskHtml(liffId, recordUrl, oaBasicId) {
   return `<!DOCTYPE html>
 <html lang="th">
 <head>
@@ -424,13 +424,29 @@ function renderAskHtml(liffId, recordUrl, roomId, roomLabel, oaBasicId) {
   <div class="box">
     <div class="spin" id="spin"></div>
     <h1 id="title">กำลังเชื่อมต่อ…</h1>
-    <p id="msg">${roomLabel}</p>
+    <p id="msg">อีกครู่เดียวค่ะ</p>
     <div id="fallback"></div>
   </div>
   <script>
     var LIFF_ID = ${JSON.stringify(liffId || '')};
     var RECORD_URL = ${JSON.stringify(recordUrl)};
-    var ROOM_ID = ${JSON.stringify(roomId)};
+    // roomId is read at RUNTIME, not injected: opening a LIFF URL with a query
+    // does not reliably deliver that query to the endpoint — LINE may wrap it in
+    // liff.state and only restore it onto location.search after liff.init().
+    // Reading it server-side 404'd every real tap.
+    function readRoomId() {
+      var q = new URLSearchParams(location.search);
+      var direct = q.get('roomId');
+      if (direct) return direct;
+      var state = q.get('liff.state');
+      if (state) {
+        try {
+          var inner = new URLSearchParams(state.charAt(0) === '?' ? state.slice(1) : state);
+          if (inner.get('roomId')) return inner.get('roomId');
+        } catch (e) { /* malformed state — fall through */ }
+      }
+      return '';
+    }
     var OA = ${JSON.stringify(oaBasicId || '')};
     var TEXT = ${JSON.stringify('สนใจสอบถามห้องนี้ค่ะ/ครับ')};
 
@@ -451,12 +467,15 @@ function renderAskHtml(liffId, recordUrl, roomId, roomLabel, oaBasicId) {
         await liff.init({ liffId: LIFF_ID });
         if (!liff.isLoggedIn()) { liff.login(); return; }
 
+        // AFTER init: LIFF has restored the original query by now.
+        var ROOM_ID = readRoomId();
+
         // Record FIRST: this is the whole reason the page exists, and it must
         // survive the customer closing the window before the message goes out.
         await fetch(RECORD_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Liff-Token': liff.getAccessToken() },
-          body: JSON.stringify({ roomId: ROOM_ID }),
+          body: JSON.stringify({ roomId: Number(ROOM_ID) || null }),
         });
 
         // Post the message for them when LINE allows it, so the chat opens with
@@ -480,19 +499,11 @@ function renderAskHtml(liffId, recordUrl, roomId, roomLabel, oaBasicId) {
 }
 
 liff.get('/ask', asyncHandler(async (req, res) => {
-  const roomId = Number(req.query.roomId)
-  const room = Number.isInteger(roomId) ? await roomsRepo.findById(roomId) : null
-  if (!room) throw new AppError(404, 'ROOM_NOT_FOUND', 'ไม่พบห้องนี้')
-  // Masked, like everywhere else the customer can see it.
-  const label = maskCodeInText(room.title, room.roomCode) || 'ห้องเช่า'
+  // No roomId lookup here on purpose — see readRoomId() in the page. The server
+  // cannot count on receiving the query, so the page resolves it after
+  // liff.init() and posts it to /ask/record itself.
   res.set('Content-Type', 'text/html; charset=utf-8')
-  res.send(renderAskHtml(
-    config.LIFF_ASK_ID,
-    `${req.baseUrl}/ask/record`,
-    roomId,
-    label,
-    await getBotBasicId(),
-  ))
+  res.send(renderAskHtml(config.LIFF_ASK_ID, `${req.baseUrl}/ask/record`, await getBotBasicId()))
 }))
 
 liff.post('/ask/record',
