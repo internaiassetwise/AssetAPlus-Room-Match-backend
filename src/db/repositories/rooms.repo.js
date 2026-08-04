@@ -41,7 +41,10 @@ export async function findAvailable({
      WHERE r.status = 'available'
        AND ($1::text IS NULL OR z.slug = $1)
        AND ($2::text IS NULL OR r.property_type = $2)
-       AND ($3::text IS NULL OR r.room_type = $3)
+       -- roomType arrives as a comma-separated list so one link can cover
+       -- several types ("STUDIO or 1 BEDROOM"), which is how admins actually
+       -- shortlist. A single-value match couldn't express that.
+       AND ($3::text IS NULL OR r.room_type = ANY(string_to_array($3, ',')))
        AND ($4::int  IS NULL OR r.monthly_rent <= $4)
        AND ($5::int  IS NULL OR r.monthly_rent >= $5)
        AND ($6::int  IS NULL OR r.bedrooms >= $6)
