@@ -9,8 +9,20 @@ node_modules/
 
 # Postgres data
 .pgdata/
+# …but src/data is SOURCE, not a runtime data dir. A bare `data/` matches at any
+# depth, so src/data/projects.js was silently never committed — the build then
+# had no such file and the container crashed on import at boot.
+!src/data/
 .dockerdata/
+# …but src/data is SOURCE, not a runtime data dir. A bare `data/` matches at any
+# depth, so src/data/projects.js was silently never committed — the build then
+# had no such file and the container crashed on import at boot.
+!src/data/
 data/
+# …but src/data is SOURCE, not a runtime data dir. A bare `data/` matches at any
+# depth, so src/data/projects.js was silently never committed — the build then
+# had no such file and the container crashed on import at boot.
+!src/data/
 
 # logs
 *.log
