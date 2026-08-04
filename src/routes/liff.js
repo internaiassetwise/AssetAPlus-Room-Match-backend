@@ -25,6 +25,8 @@ import * as roomsRepo   from '../db/repositories/rooms.repo.js'
 import * as roomInterest from '../db/repositories/roomInterest.repo.js'
 import { getBotBasicId } from '../linebot/lineMessaging.service.js'
 import { maskCodeInText } from '../linebot/roomCode.js'
+import * as lineMessaging from '../linebot/lineMessaging.service.js'
+import { roomCarousel, menuQuickReply } from '../linebot/flexMessages.js'
 import { ZONE_PROJECTS, ZONE_NAMES, ROOM_TYPES } from '../data/projects.js'
 import * as rooms       from '../db/repositories/rooms.repo.js'
 import * as roomImages  from '../db/repositories/roomImages.repo.js'
@@ -448,10 +450,13 @@ function renderAskHtml(liffId, recordUrl, oaBasicId) {
       return '';
     }
     var OA = ${JSON.stringify(oaBasicId || '')};
-    var TEXT = ${JSON.stringify('สนใจสอบถามห้องนี้ค่ะ/ครับ')};
+    // No prefilled text: the bot pushes the room card before the customer
+    // lands, so asking them to send a message too would be redundant.
+    var TEXT = '';
 
     function chatUrl() {
-      return 'https://line.me/R/oaMessage/' + encodeURIComponent(OA) + '/?' + encodeURIComponent(TEXT);
+      // Plain "open the chat" — no message to send.
+      return 'https://line.me/R/ti/p/' + encodeURIComponent(OA);
     }
 
     /**
@@ -495,15 +500,9 @@ function renderAskHtml(liffId, recordUrl, oaBasicId) {
           body: JSON.stringify({ roomId: Number(ROOM_ID) || null }),
         });
 
-        // Post the message for them when LINE allows it, so the chat opens with
-        // the question already asked rather than a blank box.
-        if (liff.isInClient() && liff.sendMessages) {
-          try {
-            await liff.sendMessages([{ type: 'text', text: TEXT }]);
-            liff.closeWindow();
-            return;
-          } catch (e) { /* scope not granted — fall through to the link */ }
-        }
+        // Opened from inside LINE: the card is already on its way, so just
+        // close and let them read it.
+        if (liff.isInClient()) { liff.closeWindow(); return; }
         goToChat();
       } catch (e) {
         // Recording failed or LIFF is unavailable — still send them to the chat.
@@ -536,6 +535,28 @@ liff.post('/ask/record',
       logger.info({ lineUserId, roomId }, 'room interest recorded from LIFF')
     } catch (err) {
       logger.warn({ err: err.message, lineUserId, roomId }, 'room interest not recorded')
+    }
+
+    // The BOT opens the conversation, so the customer arrives at a chat that
+    // already shows the room they tapped instead of an empty box they have to
+    // type into. We know who they are here — that is the whole point of the
+    // LIFF hop — so we can push before they even land.
+    try {
+      const room = await roomsRepo.findById(roomId)
+      if (room) {
+        const card = roomCarousel([room])
+        await lineMessaging.pushMessage(lineUserId, [
+          ...(card ? [card] : []),
+          { type: 'text',
+            text: 'สนใจห้องนี้ใช่ไหมคะ 😊 ถามได้เลยค่ะ เรื่องราคา นัดชม หรือรายละเอียดห้อง น้องห้องตอบให้ได้เลยนะคะ',
+            quickReply: menuQuickReply() },
+        ])
+        logger.info({ lineUserId, roomId }, 'pushed room card to open the conversation')
+      }
+    } catch (err) {
+      // A push failure must not fail the tap — the customer still reaches the
+      // chat, just without the card waiting for them.
+      logger.warn({ err: err.message, lineUserId, roomId }, 'room card push failed')
     }
     res.json({ ok: true })
   }),

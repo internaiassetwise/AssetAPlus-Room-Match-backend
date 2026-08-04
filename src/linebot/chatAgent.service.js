@@ -41,8 +41,11 @@ import * as roomImages    from '../db/repositories/roomImages.repo.js'
 import { alertAdmins } from './adminAlert.service.js'
 import { menuQuickReply, zoneQuickReply } from './flexMessages.js'
 import * as zonesRepo from '../db/repositories/zones.repo.js'
+import * as roomInterest from '../db/repositories/roomInterest.repo.js'
 
 const MAX_TOOL_ROUNDS = 5
+// How long a tapped room stays the implied subject of the conversation.
+const ROOM_CONTEXT_MINUTES = 180
 
 const SYSTEM_PROMPT = [
   'คุณเป็น "น้องห้อง" แอดมินของเว็บไซต์หาห้องเช่า "Room Match" ที่คุยกับผู้ใช้ผ่านแชท LINE',
@@ -269,12 +272,33 @@ export async function handle(lineUserId, text, replyToken = null) {
  *
  * @returns {Promise<{reply:string|null, pushes:object[]}>}
  */
+/**
+ * The room this customer arrived from, as a line of context for the model.
+ *
+ * Bounded to the last few hours on purpose: the point is "the conversation they
+ * just started is about this room", not "a room they once looked at". Without a
+ * window, someone who tapped a room last week would have every later question
+ * silently answered about it.
+ */
+async function roomContextLine(lineUserId) {
+  try {
+    const r = await roomInterest.latestForUser(lineUserId, { withinMinutes: ROOM_CONTEXT_MINUTES })
+    if (!r) return ''
+    return `\n\n[บริบท] ลูกค้าเพิ่งกดสอบถามจากหน้าห้อง: "${r.title}" (roomId=${r.roomId}) ` +
+      `ราคา ${Number(r.monthlyRent || 0).toLocaleString()} บาท/เดือน${r.zone ? ` ย่าน${r.zone}` : ''}. ` +
+      `ถ้าลูกค้าพูดว่า "ห้องนี้" หรือถามลอยๆ โดยไม่ระบุห้อง ให้หมายถึงห้องนี้ และเรียก getRoomDetails ด้วย roomId=${r.roomId} ` +
+      `หรือ scheduleViewing ด้วย roomId=${r.roomId} ได้เลย ไม่ต้องถามซ้ำว่าห้องไหน`
+  } catch {
+    return ''   // context is a bonus, never a reason to fail the turn
+  }
+}
+
 async function runAgentLoop({ lineUserId, history }) {
   const lastUserText = history.length ? history[history.length - 1].content : ''
   // lastUserText is passed to tools so escalations can record the user's actual
   // message even when the model omits it from the tool args (escalateToAdmin).
   const ctx = { lineUserId, logger, lastUserText }
-  let contents = buildContents(history)
+  let contents = buildContents(history, await roomContextLine(lineUserId))
   const pushes = []
   let retriedEmpty = false
 
@@ -323,7 +347,7 @@ async function runAgentLoop({ lineUserId, history }) {
       // echo — so it survives the failure modes that make a tools turn 400. The
       // user gets a real (if tool-less) answer instead of "ระบบตอบกลับไม่ได้".
       const tPlain = Date.now()
-      const plain = await gemini.chatTurn({ contents: buildContents(history) })
+      const plain = await gemini.chatTurn({ contents: buildContents(history, await roomContextLine(lineUserId)) })
       timings.llmMs += Date.now() - tPlain
       timings.tools.push('no-tools-fallback')
       if (plain.ok && plain.text && plain.text.trim()) {
@@ -405,8 +429,8 @@ function systemWithDate() {
  * shape and inline the system prompt into the first user turn (the v1 endpoint
  * rejects a top-level systemInstruction field; inlining is the established pattern).
  */
-function buildContents(history) {
-  const system = systemWithDate()
+function buildContents(history, extraContext = '') {
+  const system = systemWithDate() + (extraContext || '')
   const turns = (Array.isArray(history) ? history : [])
     .filter((m) => m && m.content != null && String(m.content).trim() !== '')
     .map((m) => ({

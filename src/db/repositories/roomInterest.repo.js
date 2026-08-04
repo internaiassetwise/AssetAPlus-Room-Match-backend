@@ -26,7 +26,7 @@ export async function record({ lineUserId, roomId, source = 'web-cta' }) {
  * The room this person most recently asked about, with enough detail to show
  * in the inbox. Null when they've never come in from a room page.
  */
-export async function latestForUser(lineUserId) {
+export async function latestForUser(lineUserId, { withinMinutes } = {}) {
   if (!lineUserId) return null
   const { rows } = await query(
     `SELECT i.room_id, i.source, i.created_at,
@@ -36,9 +36,10 @@ export async function latestForUser(lineUserId) {
        JOIN rooms r ON r.id = i.room_id
        LEFT JOIN zones z ON z.id = r.zone_id
       WHERE i.line_user_id = $1
+        AND ($2::int IS NULL OR i.created_at > NOW() - ($2 || ' minutes')::interval)
       ORDER BY i.created_at DESC
       LIMIT 1`,
-    [lineUserId],
+    [lineUserId, withinMinutes ?? null],
   )
   const r = rows[0]
   if (!r) return null
