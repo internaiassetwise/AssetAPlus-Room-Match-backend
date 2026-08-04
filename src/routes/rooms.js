@@ -41,6 +41,7 @@ const listQuery = z.object({
   maxRent: z.coerce.number().int().positive().optional(),
   minRent: z.coerce.number().int().nonnegative().optional(),
   beds:    z.coerce.number().int().nonnegative().optional(),
+  project: z.string().trim().max(200).optional(),
   bounds:  z.string().optional(),
   limit:   z.coerce.number().int().positive().max(200).optional(),
 })

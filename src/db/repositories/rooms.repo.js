@@ -28,7 +28,7 @@ const SELECT_ROOM = `
  *                    (rooms without a lat/lng are excluded when bounds is set)
  */
 export async function findAvailable({
-  zone, type, roomType, maxRent, minRent, beds, bounds, limit = 50,
+  zone, type, roomType, maxRent, minRent, beds, bounds, project, limit = 50,
 } = {}) {
   // Parse bounds — null when missing or malformed.
   let b = null
@@ -49,6 +49,13 @@ export async function findAvailable({
              r.lat BETWEEN $8 AND $10
          AND r.lng BETWEEN $9 AND $11
        ))
+       -- Project match is fuzzy on purpose: project_name is admin-typed free
+       -- text with spelling variants, and the title often carries the project
+       -- when the column is blank. An exact match would drop rooms the admin
+       -- can plainly see belong together.
+       AND ($13::text IS NULL
+            OR r.project_name ILIKE '%' || $13 || '%'
+            OR r.title        ILIKE '%' || $13 || '%')
      ORDER BY r.is_featured DESC, r.view_count DESC, r.created_at DESC
      LIMIT $12`,
     [
@@ -64,6 +71,7 @@ export async function findAvailable({
       b ? b[2] : null,         // $10 neLat
       b ? b[3] : null,         // $11 neLng
       Math.min(limit, 200),    // $12
+      project || null,         // $13 project name (fuzzy)
     ]
   )
   return rows.map(rowToRoom)
