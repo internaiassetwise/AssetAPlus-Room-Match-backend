@@ -83,6 +83,12 @@ rooms.get('/', validate({ query: listQuery }), asyncHandler(async (req, res) => 
 
 // ----- Admin approval flow (Phase 5) — /pending before /:id ---------------
 
+// Admin room manager — every status, not just available. Declared before
+// '/:id' so the literal path wins over the id param.
+rooms.get('/all', requireAdmin, asyncHandler(async (_req, res) => {
+  res.json(await repo.findAllForAdmin({ limit: 500 }))
+}))
+
 rooms.get('/pending', requireAdmin, asyncHandler(async (_req, res) => {
   res.json(await repo.findPending({ limit: 200 }))
 }))

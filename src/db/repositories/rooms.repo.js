@@ -77,6 +77,24 @@ export async function findAvailable({
   return rows.map(rowToRoom)
 }
 
+/**
+ * Every room, whatever its status — the admin room manager.
+ *
+ * findAvailable() filters to status='available' because it serves the public
+ * site. The admin list was calling it too, so a room disappeared from
+ * "ห้องทั้งหมด" the moment it was reserved: admin could no longer find it, let
+ * alone edit it back.
+ */
+export async function findAllForAdmin({ limit = 200 } = {}) {
+  const { rows } = await query(
+    `${SELECT_ROOM}
+     ORDER BY r.created_at DESC, r.id DESC
+     LIMIT $1`,
+    [Math.min(limit, 500)],
+  )
+  return rows.map(rowToRoom)
+}
+
 export async function findById(id) {
   const { rows } = await query(`${SELECT_ROOM} WHERE r.id = $1`, [id])
   return rows[0] ? rowToRoom(rows[0]) : null
