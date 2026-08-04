@@ -10,6 +10,9 @@ import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate }     from '../middleware/validate.js'
 import { requireAdmin } from '../middleware/requireAdmin.js'
 import { AppError }     from '../middleware/AppError.js'
+import * as viewingsRepo from '../db/repositories/viewings.repo.js'
+import * as matchesRepo from '../db/repositories/matches.repo.js'
+import * as roomInterest from '../db/repositories/roomInterest.repo.js'
 
 export const tenants = Router()
 
@@ -26,6 +29,46 @@ const patchBody = z.object({
 })
 
 const idParam = z.object({ id: z.coerce.number().int().positive() })
+
+/**
+ * GET /:id/detail — a tenant and their whole history with us.
+ *
+ * Before '/:id' handlers so the literal suffix wins. Rooms they asked about
+ * come from room_interest, which is the only record of what someone was looking
+ * at when they messaged — a viewing or a match only exists once admin acts.
+ */
+/**
+ * Viewing rows come back raw from the repo (snake_case, joined columns). The
+ * rest of the API is camelCase, so normalise here rather than leaking column
+ * names into the client — the detail panel silently rendered "ห้อง #undefined"
+ * off the mismatch.
+ */
+function shapeViewing(v) {
+  return {
+    id:           v.id,
+    roomId:       v.room_id,
+    roomTitle:    v.room_title,
+    roomCode:     v.room_code ?? null,
+    zone:         v.zone_name_th ?? null,
+    tenantId:     v.tenant_id,
+    tenantName:   v.tenant_name ?? null,
+    scheduledFor: v.scheduled_for,
+    status:       v.status,
+    note:         v.note ?? null,
+  }
+}
+
+tenants.get('/:id/detail', validate({ params: idParam }), asyncHandler(async (req, res) => {
+  const tenant = await repo.findById(req.params.id)
+  if (!tenant) throw new AppError(404, 'TENANT_NOT_FOUND', 'ไม่พบผู้เช่ารายนี้')
+  const [viewings, matches, interest] = await Promise.all([
+    viewingsRepo.findForTenant(req.params.id).catch(() => []),
+    matchesRepo.list({ tenantId: req.params.id, limit: 50 }).catch(() => []),
+    // Raw DB row here, so the column is snake_case.
+    tenant.line_id ? roomInterest.latestForUser(tenant.line_id).catch(() => null) : null,
+  ])
+  res.json({ tenant, viewings: viewings.map(shapeViewing), matches, interest })
+}))
 
 tenants.patch('/:id', validate({ params: idParam, body: patchBody }),
   asyncHandler(async (req, res) => {

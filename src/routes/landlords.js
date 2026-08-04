@@ -8,6 +8,8 @@ import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate } from '../middleware/validate.js'
 import { AppError } from '../middleware/AppError.js'
 import { requireAdmin } from '../middleware/requireAdmin.js'
+import * as roomsRepo from '../db/repositories/rooms.repo.js'
+import * as viewingsRepo from '../db/repositories/viewings.repo.js'
 
 // Build the landlord-facing claim URL. It must hit the BACKEND's /auth/line/start
 // (which redirects to LINE) — derive that base from the registered LINE redirect
@@ -67,6 +69,44 @@ const patchBody = z.object({
   contactPhone:    z.string().trim().max(40).nullable().optional(),
   contactRelation: z.enum(['self', 'child', 'spouse', 'relative', 'agent', 'other']).nullable().optional(),
 })
+
+/**
+ * GET /:id/detail — a landlord and everything attached to them.
+ *
+ * Declared before any other '/:id' route so the literal suffix wins. Rooms come
+ * from findByLandlord (every status — an admin looking at an owner wants the
+ * reserved ones too, which is the whole point of opening this).
+ */
+/**
+ * Viewing rows come back raw from the repo (snake_case, joined columns). The
+ * rest of the API is camelCase, so normalise here rather than leaking column
+ * names into the client — the detail panel silently rendered "ห้อง #undefined"
+ * off the mismatch.
+ */
+function shapeViewing(v) {
+  return {
+    id:           v.id,
+    roomId:       v.room_id,
+    roomTitle:    v.room_title,
+    roomCode:     v.room_code ?? null,
+    zone:         v.zone_name_th ?? null,
+    tenantId:     v.tenant_id,
+    tenantName:   v.tenant_name ?? null,
+    scheduledFor: v.scheduled_for,
+    status:       v.status,
+    note:         v.note ?? null,
+  }
+}
+
+landlords.get('/:id/detail', validate({ params: idParam }), asyncHandler(async (req, res) => {
+  const landlord = await repo.findById(req.params.id)
+  if (!landlord) throw new AppError(404, 'LANDLORD_NOT_FOUND', 'ไม่พบเจ้าของห้องนี้')
+  const [rooms, viewings] = await Promise.all([
+    roomsRepo.findByLandlord(req.params.id),
+    viewingsRepo.findForLandlord(req.params.id).catch(() => []),
+  ])
+  res.json({ landlord, rooms, viewings: viewings.map(shapeViewing) })
+}))
 
 landlords.get('/', validate({ query: listQuery }), asyncHandler(async (req, res) => {
   res.json(await repo.list(req.query))

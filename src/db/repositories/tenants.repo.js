@@ -88,6 +88,12 @@ export async function updateTenantProfile(tenantId, {
  * Look up a tenant by their Line userId. Returns null if absent.
  * Used by the .NET chat bot when a tenant books a viewing through chat.
  */
+/** One tenant by primary key. Raw row — the admin detail view wants everything. */
+export async function findById(id) {
+  const { rows } = await pool.query('SELECT * FROM tenants WHERE id = $1', [id])
+  return rows[0] || null
+}
+
 export async function findByLineId(lineUserId) {
   if (!lineUserId) return null
   const { rows } = await pool.query(
