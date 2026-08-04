@@ -88,7 +88,14 @@ export async function findAvailable({
 export async function findAllForAdmin({ limit = 200 } = {}) {
   const { rows } = await query(
     `${SELECT_ROOM}
-     ORDER BY r.created_at DESC, r.id DESC
+     -- Group units of the same building together, then order by room number.
+     -- Newest-first scattered the two Kave Genesis units across the table, so
+     -- "how many do we have in this project" needed reading every row.
+     -- Rooms with no project yet sort last, where they're easy to spot and fix.
+     ORDER BY (r.project_name IS NULL) ASC,
+              r.project_name ASC,
+              r.room_code ASC NULLS LAST,
+              r.id DESC
      LIMIT $1`,
     [Math.min(limit, 500)],
   )
