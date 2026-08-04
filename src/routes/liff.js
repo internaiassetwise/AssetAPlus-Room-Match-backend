@@ -423,7 +423,7 @@ function renderAskHtml(liffId, recordUrl, oaBasicId) {
 <body>
   <div class="box">
     <div class="spin" id="spin"></div>
-    <h1 id="title">กำลังเชื่อมต่อ…</h1>
+    <h1 id="title">กำลังเปิดแชท…</h1>
     <p id="msg">อีกครู่เดียวค่ะ</p>
     <div id="fallback"></div>
   </div>
@@ -450,15 +450,32 @@ function renderAskHtml(liffId, recordUrl, oaBasicId) {
     var OA = ${JSON.stringify(oaBasicId || '')};
     var TEXT = ${JSON.stringify('สนใจสอบถามห้องนี้ค่ะ/ครับ')};
 
-    function show(title, msg, showLink) {
+    function chatUrl() {
+      return 'https://line.me/R/oaMessage/' + encodeURIComponent(OA) + '/?' + encodeURIComponent(TEXT);
+    }
+
+    /**
+     * Go to the chat. This page is a waypoint, not a destination — the customer
+     * asked to talk to us, so it navigates instead of offering a second button
+     * to press. The button only appears if the navigation is still sitting here
+     * a moment later (blocked, or no OA configured), so there is never a dead end.
+     */
+    function goToChat() {
+      if (!OA) { show('เปิดแชทเพื่อสอบถาม', 'กรุณาเปิดแชท Line แล้วทักมาได้เลยค่ะ'); return; }
+      setTimeout(function () {
+        document.getElementById('spin').style.display = 'none';
+        document.getElementById('title').textContent = 'เปิดแชทเพื่อสอบถาม';
+        document.getElementById('msg').textContent = 'ถ้าหน้าต่างแชทไม่เปิดขึ้นเอง กดปุ่มด้านล่างได้เลยค่ะ';
+        document.getElementById('fallback').innerHTML =
+          '<a class="btn" href="' + chatUrl() + '">เปิดแชท Line</a>';
+      }, 1500);
+      location.replace(chatUrl());
+    }
+
+    function show(title, msg) {
       document.getElementById('spin').style.display = 'none';
       document.getElementById('title').textContent = title;
       document.getElementById('msg').textContent = msg;
-      if (showLink && OA) {
-        document.getElementById('fallback').innerHTML =
-          '<a class="btn" href="https://line.me/R/oaMessage/' + encodeURIComponent(OA) + '/?' +
-          encodeURIComponent(TEXT) + '">เปิดแชท Line</a>';
-      }
     }
 
     (async function () {
@@ -487,10 +504,11 @@ function renderAskHtml(liffId, recordUrl, oaBasicId) {
             return;
           } catch (e) { /* scope not granted — fall through to the link */ }
         }
-        show('เรียบร้อยแล้ว', 'กดปุ่มด้านล่างเพื่อเปิดแชทได้เลยค่ะ', true);
+        goToChat();
       } catch (e) {
-        // Never a dead end: the customer can still reach the OA by hand.
-        show('เปิดแชทเพื่อสอบถาม', 'กดปุ่มด้านล่างเพื่อคุยกับแอดมินได้เลยค่ะ', true);
+        // Recording failed or LIFF is unavailable — still send them to the chat.
+        // Losing the room attribution is much better than losing the customer.
+        goToChat();
       }
     })();
   </script>
