@@ -24,6 +24,7 @@ export function rowToRoom(row) {
     baths: row.bathrooms,
     sqm: row.size_sqm == null ? null : Number(row.size_sqm),
     price: row.monthly_rent,
+    isNewArrival: row.is_new_arrival ?? false,
     status: row.status,
     availableFrom: row.available_from,
     address: row.address ?? null,

@@ -21,6 +21,7 @@ import { resizeForWeb } from '../services/imageResize.service.js'
 import { config } from '../config.js'
 import * as landlords   from '../db/repositories/landlords.repo.js'
 import { findByName }   from '../db/repositories/zones.repo.js'
+import { query }        from '../db/pool.js'
 import * as rooms       from '../db/repositories/rooms.repo.js'
 import * as roomImages  from '../db/repositories/roomImages.repo.js'
 import fs from 'node:fs/promises'
@@ -47,7 +48,7 @@ const photoUpload = multer({
  * Render the listing form. The LIFF id and submit URL are injected from the
  * server so the page works whether it is served at /api/liff or /api/v1/liff.
  */
-function renderListingHtml(liffId, submitUrl) {
+function renderListingHtml(liffId, submitUrl, ZONE_PROJECTS = {}) {
   return `<!DOCTYPE html>
 <html lang="th">
 <head>
@@ -135,16 +136,15 @@ function renderListingHtml(liffId, submitUrl) {
         <label for="contactPersonRelation">ความสัมพันธ์กับเจ้าของห้อง</label>
         <select id="contactPersonRelation" name="contactPersonRelation">
           <option value="">— เลือก —</option>
-          <option value="child">ลูก</option>
-          <option value="spouse">คู่สมรส</option>
-          <option value="relative">ญาติ</option>
-          <option value="agent">นายหน้า</option>
-          <option value="other">อื่นๆ</option>
+          <option value="บิดา/มารดา">บิดา/มารดา</option>
+          <option value="คู่สมรส">คู่สมรส</option>
+          <option value="บุตร">บุตร</option>
+          <option value="พี่/น้องร่วมสายเลือด">พี่/น้องร่วมสายเลือด</option>
+          <option value="อื่นๆ">อื่นๆ (ระบุ)</option>
         </select>
+        <input id="contactPersonRelationOther" name="contactPersonRelationOther" type="text"
+               placeholder="ระบุความสัมพันธ์" style="display:none; margin-top:8px;" />
       </details>
-
-      <label for="title">ชื่อห้อง</label>
-      <input id="title" name="title" type="text" required placeholder="เช่น คอนโด ใกล้ BTS" />
 
       <label for="zone">ย่าน</label>
       <select id="zone" name="zone" required>
@@ -161,7 +161,17 @@ function renderListingHtml(liffId, submitUrl) {
       </select>
       <input id="zoneOther" type="text" placeholder="ระบุย่านของคุณ" style="display:none; margin-top:8px;" />
 
-      <label for="propertyType">ประเภท</label>
+      <label for="projectName">ชื่อโครงการ <span class="opt">*</span></label>
+      <select id="projectName" name="projectName" required>
+        <option value="">— เลือกย่านก่อน —</option>
+      </select>
+      <input id="projectNameOther" name="projectNameOther" type="text"
+             placeholder="พิมพ์ชื่อโครงการ" style="display:none; margin-top:8px;" />
+
+      <label for="roomCode">รหัสห้อง / เลขห้อง <span class="opt">*</span></label>
+      <input id="roomCode" name="roomCode" type="text" required placeholder="เช่น A0123" />
+
+      <label for="propertyType">ประเภทที่อยู่อาศัย</label>
       <select id="propertyType" name="propertyType">
         <option value="condo">คอนโด</option>
         <option value="house">บ้าน</option>
@@ -169,6 +179,30 @@ function renderListingHtml(liffId, submitUrl) {
         <option value="apartment">อพาร์ตเมนต์</option>
         <option value="studio">สตูดิโอ</option>
       </select>
+
+      <label for="roomType">ประเภทห้อง</label>
+      <select id="roomType" name="roomType">
+        <option value="">— เลือกประเภทห้อง —</option>
+        <option value="STUDIO">Studio</option>
+        <option value="1 BEDROOM">1 Bedroom</option>
+        <option value="2 BEDROOM">2 Bedroom</option>
+        <option value="DUPLEX">Duplex</option>
+        <option value="PENTHOUSE">Penthouse</option>
+      </select>
+
+      <div class="row">
+        <div>
+          <label for="building">ตึก</label>
+          <input id="building" name="building" type="text" placeholder="เช่น A" />
+        </div>
+        <div>
+          <label for="floor">ชั้น</label>
+          <input id="floor" name="floor" type="number" min="-10" max="200" placeholder="เช่น 12" />
+        </div>
+      </div>
+
+      <label for="viewType">วิว</label>
+      <input id="viewType" name="viewType" type="text" placeholder="เช่น วิวสระว่ายน้ำ" />
 
       <div class="row">
         <div>
@@ -187,13 +221,19 @@ function renderListingHtml(liffId, submitUrl) {
       <label for="monthlyRent">ค่าเช่า/เดือน (บาท)</label>
       <input id="monthlyRent" name="monthlyRent" type="number" min="1000" step="100" required />
 
+      <label for="description">รายละเอียด</label>
+      <textarea id="description" name="description" placeholder="จุดเด่น ทำเล สภาพห้อง ฯลฯ"></textarea>
+
+      <label for="amenities">สิ่งอำนวยความสะดวก <span class="opt">(คั่นด้วยจุลภาค)</span></label>
+      <input id="amenities" name="amenities" type="text" placeholder="wifi, pool, gym" />
+
+      <label for="availableFrom">วันที่ว่าง</label>
+      <input id="availableFrom" name="availableFrom" type="date" />
+
       <label for="address">ที่อยู่ <span class="opt">(ไม่จำเป็น)</span></label>
       <input id="address" name="address" type="text" />
 
-      <label for="description">รายละเอียด <span class="opt">(ไม่จำเป็น)</span></label>
-      <textarea id="description" name="description"></textarea>
-
-      <label for="photos">รูปห้อง <span class="opt">(เลือกได้หลายรูป)</span></label>
+      <label for="photos">รูปภาพห้อง <span class="opt">(เลือกได้หลายรูป)</span></label>
       <input id="photos" name="photos" type="file" accept="image/*" multiple />
 
       <button class="btn" id="submitBtn" type="submit">ส่งประกาศ</button>
@@ -240,13 +280,58 @@ function renderListingHtml(liffId, submitUrl) {
       });
     })();
 
-    // Show the free-text input when "อื่นๆ" is selected, hide otherwise.
-    var zoneSelect = document.getElementById('zone');
-    var zoneOther  = document.getElementById('zoneOther');
+    // Zone -> project, the same cascade the admin form uses. Mirrored here
+    // rather than fetched so the form still works on a flaky mobile connection
+    // inside LINE; the list is short and changes rarely.
+    var ZONE_PROJECTS = ${JSON.stringify(ZONE_PROJECTS)};
+
+    function toggleOther(sel, other, trigger) {
+      var on = sel.value === trigger;
+      other.style.display = on ? 'block' : 'none';
+      if (!on) other.value = '';
+      other.required = on;
+    }
+
+    var zoneSelect    = document.getElementById('zone');
+    var zoneOther     = document.getElementById('zoneOther');
+    var projectSelect = document.getElementById('projectName');
+    var projectOther  = document.getElementById('projectNameOther');
+    var relSelect     = document.getElementById('contactPersonRelation');
+    var relOther      = document.getElementById('contactPersonRelationOther');
+
+    function fillProjects(zoneName) {
+      var list = ZONE_PROJECTS[zoneName] || [];
+      projectSelect.innerHTML = '';
+      var first = document.createElement('option');
+      first.value = '';
+      first.textContent = list.length ? '— เลือกโครงการ —' : '— พิมพ์ชื่อโครงการ —';
+      projectSelect.appendChild(first);
+      list.forEach(function (name) {
+        var o = document.createElement('option');
+        o.value = name; o.textContent = name;
+        projectSelect.appendChild(o);
+      });
+      // Always offer a way out of the list: a zone we don't have on file, or a
+      // brand-new building, must not be a dead end.
+      var other = document.createElement('option');
+      other.value = 'อื่นๆ'; other.textContent = 'อื่นๆ — พิมพ์ชื่อเอง…';
+      projectSelect.appendChild(other);
+      if (!list.length) { projectSelect.value = 'อื่นๆ'; }
+      toggleOther(projectSelect, projectOther, 'อื่นๆ');
+    }
+
     zoneSelect.addEventListener('change', function () {
-      zoneOther.style.display = this.value === 'อื่นๆ' ? 'block' : 'none';
-      if (this.value !== 'อื่นๆ') zoneOther.value = '';
+      toggleOther(zoneSelect, zoneOther, 'อื่นๆ');
+      fillProjects(this.value);
     });
+    projectSelect.addEventListener('change', function () {
+      toggleOther(projectSelect, projectOther, 'อื่นๆ');
+    });
+    if (relSelect) {
+      relSelect.addEventListener('change', function () {
+        toggleOther(relSelect, relOther, 'อื่นๆ');
+      });
+    }
 
     form.addEventListener('submit', function (e) {
       e.preventDefault();
@@ -263,6 +348,24 @@ function renderListingHtml(liffId, submitUrl) {
         }
         fd.set('zone', other);
       }
+      // Same swap for project and relationship: the select holds a sentinel,
+      // the real value is in the text box beside it.
+      if (fd.get('projectName') === 'อื่นๆ' || !fd.get('projectName')) {
+        var proj = document.getElementById('projectNameOther').value.trim();
+        if (!proj) {
+          showStatus('กรุณาเลือกหรือพิมพ์ชื่อโครงการ', true);
+          setLoading(false);
+          return;
+        }
+        fd.set('projectName', proj);
+      }
+      if (fd.get('contactPersonRelation') === 'อื่นๆ') {
+        fd.set('contactPersonRelation',
+               document.getElementById('contactPersonRelationOther').value.trim() || 'อื่นๆ');
+      }
+      // The project name IS the listing title — one source, so the two can't
+      // drift the way the legacy free-text title did.
+      fd.set('title', fd.get('projectName'));
       // Send the LIFF access token so the server verifies our identity — the
       // hidden lineUserId field is no longer trusted on its own.
       var token = (typeof liff !== 'undefined' && liff.getAccessToken) ? liff.getAccessToken() : '';
@@ -290,13 +393,42 @@ function renderListingHtml(liffId, submitUrl) {
 }
 
 // GET /listing — serve the fillable form. Content-Type text/html; charset=utf-8.
-liff.get('/listing', (req, res) => {
+/**
+ * Zone → the projects we already have rooms in.
+ *
+ * Read from the data rather than duplicating the client's curated list: this
+ * page lives in the server repo and that list lives in the client repo, so a
+ * copy here would drift the first time either side is edited. Deriving it also
+ * means a new building appears in the dropdown as soon as one room uses it.
+ *
+ * Best-effort — the form still works with an empty map, because the project
+ * field always offers "พิมพ์ชื่อเอง".
+ */
+async function zoneProjects() {
+  try {
+    const { rows } = await query(
+      `SELECT z.name_th AS zone, r.project_name AS project
+         FROM rooms r JOIN zones z ON z.id = r.zone_id
+        WHERE NULLIF(TRIM(r.project_name), '') IS NOT NULL
+        GROUP BY z.name_th, r.project_name
+        ORDER BY z.name_th, r.project_name`,
+    )
+    const out = {}
+    for (const r of rows) (out[r.zone] ??= []).push(r.project)
+    return out
+  } catch (err) {
+    logger.warn({ err: err.message }, 'liff: could not load zone/project list')
+    return {}
+  }
+}
+
+liff.get('/listing', asyncHandler(async (req, res) => {
   // Submit URL is computed from the matched mount path so the page works whether
   // it is served at /api/liff or /api/v1/liff (same-origin, no hardcoding).
   const submitUrl = `${req.baseUrl}/listing/submit`
   res.set('Content-Type', 'text/html; charset=utf-8')
-  res.send(renderListingHtml(config.LIFF_LISTING_ID, submitUrl))
-})
+  res.send(renderListingHtml(config.LIFF_LISTING_ID, submitUrl, await zoneProjects()))
+}))
 
 // POST /listing/submit — receive the form, create a pending room + photos.
 // Photos arrive as multipart/form-data field "photos" (max 10, images only).
@@ -359,16 +491,29 @@ liff.post('/listing/submit',
     throw new AppError(400, 'INVALID_BATHROOMS', 'จำนวนห้องน้ำไม่ถูกต้อง')
   }
 
+  // Amenities arrive as one comma-separated string, same as the admin form.
+  const amenities = String(req.body.amenities || '')
+    .split(',').map((a) => a.trim()).filter(Boolean).slice(0, 50)
+  const floor = req.body.floor === '' || req.body.floor == null ? null : Number(req.body.floor)
+
   const room = await rooms.createPending({
     landlordId:           landlord.id,
     zoneId:               zone.id,
     title,
     description:          req.body.description || '',
     propertyType:         req.body.propertyType || 'condo',
+    roomType:             req.body.roomType || null,
+    projectName:          req.body.projectName || null,
+    roomCode:             req.body.roomCode || null,
+    building:             req.body.building || null,
+    floor:                Number.isFinite(floor) ? floor : null,
+    viewType:             req.body.viewType || null,
     bedrooms:             +req.body.bedrooms,
     bathrooms:            +req.body.bathrooms,
     sizeSqm:              +req.body.sizeSqm || 0,
     monthlyRent:          +req.body.monthlyRent,
+    availableFrom:        req.body.availableFrom || null,
+    amenities,
     address:              req.body.address || null,
     createdByLineUserId:  lineUserId,
   })

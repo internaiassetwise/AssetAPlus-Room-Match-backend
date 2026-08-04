@@ -67,6 +67,7 @@ const writeBody = z.object({
   availableFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)').optional().or(z.literal('')),
   amenities:     z.array(z.string().trim().min(1)).max(50).optional(),
   isFeatured:    z.boolean().optional(),
+  isNewArrival:  z.boolean().optional(),
 })
 
 const idParam = z.object({ id: z.coerce.number().int().positive() })

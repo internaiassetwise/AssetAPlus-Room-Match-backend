@@ -123,7 +123,7 @@ export async function create(input) {
     landlordId, zoneId, title, description = '',
     propertyType, bedrooms, bathrooms, sizeSqm = 0,
     monthlyRent, status = 'available', availableFrom = null,
-    amenities = [], isFeatured = false,
+    amenities = [], isFeatured = false, isNewArrival = false,
     lat = null, lng = null, address = null,
     projectName = null, roomCode = null, building = null,
     floor = null, viewType = null, roomType = null,
@@ -131,15 +131,15 @@ export async function create(input) {
   const { rows } = await query(
     `INSERT INTO rooms (landlord_id, zone_id, title, description, property_type,
                         bedrooms, bathrooms, size_sqm, monthly_rent, status,
-                        available_from, amenities, is_featured,
+                        available_from, amenities, is_featured, is_new_arrival,
                         lat, lng, address,
                         project_name, room_code, building, floor, view_type, room_type)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
      RETURNING id`,
     [
       landlordId, zoneId, title, description, propertyType,
       bedrooms, bathrooms, sizeSqm ?? 0, monthlyRent, status,
-      availableFrom, JSON.stringify(amenities), isFeatured,
+      availableFrom, JSON.stringify(amenities), isFeatured, isNewArrival,
       lat ?? null, lng ?? null, address ?? null,
       projectName, roomCode, building, floor, viewType, roomType,
     ],
@@ -165,6 +165,7 @@ export async function update(id, fields) {
     status:        'status',
     availableFrom: 'available_from',
     isFeatured:    'is_featured',
+    isNewArrival:  'is_new_arrival',
     lat:           'lat',
     lng:           'lng',
     address:       'address',
@@ -259,19 +260,26 @@ export async function createPending({
   bedrooms, bathrooms, sizeSqm = 0, monthlyRent, availableFrom = null,
   amenities = [], address = null, lat = null, lng = null,
   createdByLineUserId = null,
+  // The LIFF form now collects the same room identity the admin form does, so a
+  // landlord submission arrives complete instead of needing admin to re-key it.
+  projectName = null, roomCode = null, building = null,
+  floor = null, viewType = null, roomType = null,
 }) {
   const { rows } = await query(
     `INSERT INTO rooms (landlord_id, zone_id, title, description, property_type,
                         bedrooms, bathrooms, size_sqm, monthly_rent, status,
-                        available_from, amenities, is_featured, lat, lng, address,
-                        created_by_line_user_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11::jsonb,false,$12,$13,$14,$15)
+                        available_from, amenities, is_featured, is_new_arrival, lat, lng, address,
+                        created_by_line_user_id,
+                        project_name, room_code, building, floor, view_type, room_type)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11::jsonb,false,false,$12,$13,$14,$15,
+             $16,$17,$18,$19,$20,$21)
      RETURNING id`,
     [
       landlordId, zoneId, title, description, propertyType,
       bedrooms, bathrooms, sizeSqm ?? 0, monthlyRent,
       availableFrom, JSON.stringify(amenities), lat ?? null, lng ?? null, address ?? null,
       createdByLineUserId ?? null,
+      projectName, roomCode, building, floor, viewType, roomType,
     ],
   )
   return findById(rows[0].id)
