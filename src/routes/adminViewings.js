@@ -92,7 +92,10 @@ adminViewings.get('/', requireAdmin, asyncHandler(async (req, res) => {
 
 // POST / — admin books an appointment directly for a tenant who asked them to
 // arrange it. Created as 'confirmed' and the tenant is pushed a LINE confirmation.
-// Time comes from EITHER a clicked open slot (slotId — preferred, and booked
+// Time comes from the admin: the self-service slot flow is gone, so there is no
+// slot to click. Kept accepting slotId would be accepting a value nothing can
+// produce.
+// (was: EITHER a clicked open slot (slotId — preferred, and booked
 // atomically so a tenant can't grab it via the bot at the same moment) OR a
 // free-typed scheduledFor (for rooms that have no open slots).
 const createBody = z.object({

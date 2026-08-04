@@ -50,7 +50,10 @@ const createBody = z.object({
   // fronts for the owner. Blank means the owner is their own contact.
   contactName:     z.string().trim().max(160).nullable().optional(),
   contactPhone:    z.string().trim().max(40).nullable().optional(),
-  contactRelation: z.enum(['self', 'child', 'spouse', 'relative', 'agent', 'other']).nullable().optional(),
+  // Free text, not an enum. The LIFF form offers "อื่นๆ (ระบุ)" so the value is
+  // whatever the person typed; an enum would have rejected the very submissions
+  // that form produces, and only at the point an admin later edited them.
+  contactRelation: z.string().trim().max(60).nullable().optional(),
 })
 
 const patchBody = z.object({
@@ -67,7 +70,10 @@ const patchBody = z.object({
   // fronts for the owner. Blank means the owner is their own contact.
   contactName:     z.string().trim().max(160).nullable().optional(),
   contactPhone:    z.string().trim().max(40).nullable().optional(),
-  contactRelation: z.enum(['self', 'child', 'spouse', 'relative', 'agent', 'other']).nullable().optional(),
+  // Free text, not an enum. The LIFF form offers "อื่นๆ (ระบุ)" so the value is
+  // whatever the person typed; an enum would have rejected the very submissions
+  // that form produces, and only at the point an admin later edited them.
+  contactRelation: z.string().trim().max(60).nullable().optional(),
 })
 
 /**

@@ -6,7 +6,7 @@
 //
 // Two families:
 //   1) Rich room/slot/LIFF cards (Feature A/B/C): roomCard/roomCarousel,
-//      slotCarousel, listingFormCard.
+//      listingFormCard.
 //   2) Simple confirmation cards: viewingConfirmation, pendingListing, welcome.
 
 import { config } from '../config.js'
@@ -174,35 +174,6 @@ export function roomCarousel(rooms = []) {
  * postback button `action=book&slotId=<id>` (handled by the webhook postback
  * dispatcher — NOT the LLM, so booking is deterministic).
  */
-export function slotCarousel(roomTitle, slots = []) {
-  const list = (Array.isArray(slots) ? slots : []).slice(0, 10)
-  if (list.length === 0) return null
-  const bubble = (s) => ({
-    type: 'bubble',
-    body: {
-      type: 'box', layout: 'vertical', spacing: 'sm', contents: [
-        { type: 'text', text: roomTitle || 'นัดชมห้อง', weight: 'bold', wrap: true, color: '#1A1A1A' },
-        { type: 'text', text: 'เวลาที่เปิดให้นัด', size: 'xs', color: '#6B7280' },
-        { type: 'text', text: bangkok(s.startsAt || s.starts_at), weight: 'bold', size: 'lg', color: '#0A7C3B', wrap: true },
-      ],
-    },
-    footer: {
-      type: 'box', layout: 'vertical', contents: [
-        { type: 'button', style: 'primary', color: '#1F4068',
-          action: { type: 'postback', label: 'จองเวลานี้', data: `action=book&slotId=${s.id}`, displayText: 'จองเวลานี้' } },
-      ],
-    },
-  })
-  if (list.length === 1) {
-    return { type: 'flex', altText: `เวลานัดชม: ${bangkok(list[0].startsAt || list[0].starts_at)}`, contents: bubble(list[0]) }
-  }
-  return {
-    type: 'flex',
-    altText: `เลือกเวลานัดชมห้อง — ${list.length} ช่วง`,
-    contents: { type: 'carousel', contents: list.map(bubble) },
-  }
-}
-
 // ---------------------------------------------------------------------------
 // LIFF listing form card (Feature C)
 // ---------------------------------------------------------------------------

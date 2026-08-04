@@ -3,7 +3,6 @@ import { Router } from 'express'
 import { z } from 'zod'
 import multer from 'multer'
 import * as repo from '../db/repositories/rooms.repo.js'
-import * as slotsRepo from '../db/repositories/viewingSlots.repo.js'
 import * as roomImages from '../db/repositories/roomImages.repo.js'
 import { detectImageExt } from '../services/fileSignature.service.js'
 import { resizeForWeb } from '../services/imageResize.service.js'
@@ -73,7 +72,6 @@ const writeBody = z.object({
 const idParam = z.object({ id: z.coerce.number().int().positive() })
 // Accepts ISO-8601 (with or without timezone) — datetime-local → ISO conversion
 // happens client-side. Postgres will reject anything that isn't a real timestamp.
-const slotBody = z.object({ startsAt: z.string().refine((v) => !Number.isNaN(Date.parse(v)), { message: 'รูปแบบวันที่ไม่ถูกต้อง' }) })
 
 rooms.get('/', validate({ query: listQuery }), asyncHandler(async (req, res) => {
   // Explicit arrow, NOT .map(publicRoom): map passes (item, index, array), so
@@ -131,27 +129,6 @@ async function peekAdmin(req) {
     return false
   }
 }
-
-// ----- Viewing slots (Phase 6) ---------------------------------------------
-// GET is public (the bot + anyone browsing can see open times); writes are admin.
-
-rooms.get('/:id/slots', validate({ params: idParam }), asyncHandler(async (req, res) => {
-  res.json(await slotsRepo.openForRoom(req.params.id))
-}))
-
-rooms.post('/:id/slots', requireAdmin, validate({ params: idParam, body: slotBody }),
-  asyncHandler(async (req, res) => {
-    res.status(201).json(await slotsRepo.create({ roomId: req.params.id, startsAt: req.body.startsAt }))
-  }),
-)
-
-rooms.delete('/slots/:id', requireAdmin, validate({ params: idParam }),
-  asyncHandler(async (req, res) => {
-    const ok = await slotsRepo.cancel(req.params.id)
-    if (!ok) throw new AppError(404, 'SLOT_NOT_FOUND', 'ไม่พบช่วงเวลา หรือถูกจองไปแล้ว')
-    res.status(204).end()
-  }),
-)
 
 // ----- Authenticated write endpoints (admin room CRUD) --------------------
 

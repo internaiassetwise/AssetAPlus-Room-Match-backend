@@ -21,7 +21,7 @@ import { resizeForWeb } from '../services/imageResize.service.js'
 import { config } from '../config.js'
 import * as landlords   from '../db/repositories/landlords.repo.js'
 import { findByName }   from '../db/repositories/zones.repo.js'
-import { query }        from '../db/pool.js'
+import { ZONE_PROJECTS, ZONE_NAMES, ROOM_TYPES } from '../data/projects.js'
 import * as rooms       from '../db/repositories/rooms.repo.js'
 import * as roomImages  from '../db/repositories/roomImages.repo.js'
 import fs from 'node:fs/promises'
@@ -48,7 +48,7 @@ const photoUpload = multer({
  * Render the listing form. The LIFF id and submit URL are injected from the
  * server so the page works whether it is served at /api/liff or /api/v1/liff.
  */
-function renderListingHtml(liffId, submitUrl, ZONE_PROJECTS = {}) {
+function renderListingHtml(liffId, submitUrl) {
   return `<!DOCTYPE html>
 <html lang="th">
 <head>
@@ -146,20 +146,13 @@ function renderListingHtml(liffId, submitUrl, ZONE_PROJECTS = {}) {
                placeholder="ระบุความสัมพันธ์" style="display:none; margin-top:8px;" />
       </details>
 
-      <label for="zone">ย่าน</label>
+      <label for="zone">โซน / ทำเล <span class="opt">*</span></label>
       <select id="zone" name="zone" required>
-        <option value="">— เลือกย่าน —</option>
-        <option value="ลาดพร้าว">ลาดพร้าว</option>
-        <option value="รัชดา-ห้วยขวาง">รัชดา-ห้วยขวาง</option>
-        <option value="ศรีสมาน">ศรีสมาน</option>
-        <option value="อ่อนนุช">อ่อนนุช</option>
-        <option value="เกษตร">เกษตร</option>
-        <option value="แจ้งวัฒนะ">แจ้งวัฒนะ</option>
-        <option value="ศาลายา">ศาลายา</option>
-        <option value="นครปฐม">นครปฐม</option>
+        <option value="">— เลือกโซน / ทำเล —</option>
+        ${ZONE_NAMES.map((z) => `<option value="${z}">${z}</option>`).join('\n        ')}
         <option value="อื่นๆ">อื่นๆ</option>
       </select>
-      <input id="zoneOther" type="text" placeholder="ระบุย่านของคุณ" style="display:none; margin-top:8px;" />
+      <input id="zoneOther" type="text" placeholder="ระบุโซน / ทำเลของคุณ" style="display:none; margin-top:8px;" />
 
       <label for="projectName">ชื่อโครงการ <span class="opt">*</span></label>
       <select id="projectName" name="projectName" required>
@@ -171,23 +164,12 @@ function renderListingHtml(liffId, submitUrl, ZONE_PROJECTS = {}) {
       <label for="roomCode">รหัสห้อง / เลขห้อง <span class="opt">*</span></label>
       <input id="roomCode" name="roomCode" type="text" required placeholder="เช่น A0123" />
 
-      <label for="propertyType">ประเภทที่อยู่อาศัย</label>
-      <select id="propertyType" name="propertyType">
-        <option value="condo">คอนโด</option>
-        <option value="house">บ้าน</option>
-        <option value="townhouse">ทาวน์เฮ้าส์</option>
-        <option value="apartment">อพาร์ตเมนต์</option>
-        <option value="studio">สตูดิโอ</option>
-      </select>
+      <input type="hidden" name="propertyType" value="condo" />
 
       <label for="roomType">ประเภทห้อง</label>
       <select id="roomType" name="roomType">
         <option value="">— เลือกประเภทห้อง —</option>
-        <option value="STUDIO">Studio</option>
-        <option value="1 BEDROOM">1 Bedroom</option>
-        <option value="2 BEDROOM">2 Bedroom</option>
-        <option value="DUPLEX">Duplex</option>
-        <option value="PENTHOUSE">Penthouse</option>
+        ${ROOM_TYPES.map((t) => `<option value="${t}">${t}</option>`).join('\n        ')}
       </select>
 
       <div class="row">
@@ -342,7 +324,7 @@ function renderListingHtml(liffId, submitUrl, ZONE_PROJECTS = {}) {
       if (fd.get('zone') === 'อื่นๆ') {
         var other = document.getElementById('zoneOther').value.trim();
         if (!other) {
-          showStatus('กรุณาระบุย่านของคุณ', true);
+          showStatus('กรุณาระบุโซน / ทำเลของคุณ', true);
           setLoading(false);
           return;
         }
@@ -393,42 +375,13 @@ function renderListingHtml(liffId, submitUrl, ZONE_PROJECTS = {}) {
 }
 
 // GET /listing — serve the fillable form. Content-Type text/html; charset=utf-8.
-/**
- * Zone → the projects we already have rooms in.
- *
- * Read from the data rather than duplicating the client's curated list: this
- * page lives in the server repo and that list lives in the client repo, so a
- * copy here would drift the first time either side is edited. Deriving it also
- * means a new building appears in the dropdown as soon as one room uses it.
- *
- * Best-effort — the form still works with an empty map, because the project
- * field always offers "พิมพ์ชื่อเอง".
- */
-async function zoneProjects() {
-  try {
-    const { rows } = await query(
-      `SELECT z.name_th AS zone, r.project_name AS project
-         FROM rooms r JOIN zones z ON z.id = r.zone_id
-        WHERE NULLIF(TRIM(r.project_name), '') IS NOT NULL
-        GROUP BY z.name_th, r.project_name
-        ORDER BY z.name_th, r.project_name`,
-    )
-    const out = {}
-    for (const r of rows) (out[r.zone] ??= []).push(r.project)
-    return out
-  } catch (err) {
-    logger.warn({ err: err.message }, 'liff: could not load zone/project list')
-    return {}
-  }
-}
-
-liff.get('/listing', asyncHandler(async (req, res) => {
+liff.get('/listing', (req, res) => {
   // Submit URL is computed from the matched mount path so the page works whether
   // it is served at /api/liff or /api/v1/liff (same-origin, no hardcoding).
   const submitUrl = `${req.baseUrl}/listing/submit`
   res.set('Content-Type', 'text/html; charset=utf-8')
-  res.send(renderListingHtml(config.LIFF_LISTING_ID, submitUrl, await zoneProjects()))
-}))
+  res.send(renderListingHtml(config.LIFF_LISTING_ID, submitUrl))
+})
 
 // POST /listing/submit — receive the form, create a pending room + photos.
 // Photos arrive as multipart/form-data field "photos" (max 10, images only).

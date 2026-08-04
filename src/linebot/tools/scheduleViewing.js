@@ -7,9 +7,7 @@
 // never creates a viewing itself; it only offers slots.
 
 import { findById } from '../../db/repositories/rooms.repo.js'
-import { openForRoom } from '../../db/repositories/viewingSlots.repo.js'
 import { alertAdmins } from '../adminAlert.service.js'
-import { slotCarousel } from '../flexMessages.js'
 
 export const name = 'scheduleViewing'
 
@@ -42,30 +40,22 @@ export async function handler(args, ctx) {
     return { error: 'room not found or not available' }
   }
 
-  const slots = await openForRoom(roomId)
-  if (slots.length === 0) {
-    logger.info({ tool: name, roomId }, 'scheduleViewing: no open slots')
-    // No bookable times → alert the admin so they can open a slot and follow up
-    // with the tenant. Best-effort: a DB failure here must not break the reply.
-    try {
-      await alertAdmins({
-        lineUserId:      ctx.lineUserId,
-        reason:          'view-a-room',
-        summary:         `ลูกค้าต้องการนัดชมห้อง "${room.title}" (ห้อง #${roomId}) แต่ยังไม่มีช่วงเวลาที่เปิดให้จอง — รบกวนเปิดเวลานัดชมและติดต่อกลับลูกค้า`,
-        originalPayload: { roomId, roomTitle: room.title, want: 'viewing-no-slots' },
-      })
-      logger.info({ tool: name, roomId, lineUserId: ctx.lineUserId }, 'scheduleViewing: admin alerted (no slots)')
-    } catch (err) {
-      logger.error({ err, tool: name, roomId }, 'scheduleViewing: admin alert failed')
-    }
-    return { hasSlots: false, roomTitle: room.title, adminAlerted: true }
+  // Every viewing request is now an admin task. The self-service slot flow is
+  // gone: admins book the appointment themselves in /admin/viewings, which is
+  // what they were doing anyway — opening slots per room was an extra step
+  // that had to happen BEFORE a customer could ask, so in practice the "no
+  // slots" branch was the only one anyone hit.
+  // Best-effort: a DB failure here must not break the reply.
+  try {
+    await alertAdmins({
+      lineUserId:      ctx.lineUserId,
+      reason:          'view-a-room',
+      summary:         `ลูกค้าต้องการนัดชมห้อง "${room.title}" (ห้อง #${roomId}) — รบกวนติดต่อกลับเพื่อนัดวันเวลา`,
+      originalPayload: { roomId, roomTitle: room.title, want: 'viewing-request' },
+    })
+    logger.info({ tool: name, roomId, lineUserId: ctx.lineUserId }, 'scheduleViewing: admin alerted')
+  } catch (err) {
+    logger.error({ err, tool: name, roomId }, 'scheduleViewing: admin alert failed')
   }
-
-  logger.info({ tool: name, roomId, slots: slots.length }, 'scheduleViewing: offered slots')
-  return {
-    hasSlots: true,
-    count: slots.length,
-    roomTitle: room.title,
-    _push: [slotCarousel(room.title, slots)],
-  }
+  return { hasSlots: false, roomTitle: room.title, adminAlerted: true }
 }

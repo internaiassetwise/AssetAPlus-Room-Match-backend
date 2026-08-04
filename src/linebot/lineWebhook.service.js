@@ -304,9 +304,12 @@ async function routeToLiveAgent(lineUserId, ev) {
 
 /**
  * Deterministic postback dispatcher. Data is a query string set by the Flex
- * button, e.g. `action=book&slotId=5`. Supported actions: `book` (deterministic
- * slot booking), and `viewing`/`details` (room-card taps that re-enter the agent
- * with the internal roomId, so the user sees the room number but lookups use id).
+ * button, e.g. `action=viewing&roomId=5`. Supported actions: `viewing` /
+ * `details` — room-card taps that re-enter the agent with the internal roomId,
+ * so the user sees the room number but lookups use the id.
+ *
+ * `book` is gone with the self-service slot flow: customers no longer pick a
+ * time themselves, admin books the appointment for them.
  */
 export async function handlePostback(lineUserId, dataStr, replyToken = null) {
   if (!lineUserId) return
@@ -314,11 +317,7 @@ export async function handlePostback(lineUserId, dataStr, replyToken = null) {
   const action = params.get('action')
   logger.info({ lineUserId, action, data: dataStr }, 'postback received')
 
-  if (action === 'book') {
-    const slotId = Number(params.get('slotId'))
-    if (Number.isInteger(slotId)) await bookSlot(lineUserId, slotId, replyToken)
-    else await lineMessaging.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ ไม่สามารถจองได้ (ข้อมูลไม่ถูกต้อง)')
-  } else if (action === 'viewing' || action === 'details') {
+  if (action === 'viewing' || action === 'details') {
     // Room cards send these when the user taps อยากนัดชม / ดูรายละเอียด. The
     // button shows the room NUMBER (displayText) while the internal id rides in
     // `data`, so we re-enter the normal agent path with an id-bearing phrase —
@@ -336,52 +335,6 @@ export async function handlePostback(lineUserId, dataStr, replyToken = null) {
   // Unknown actions are no-ops (logged above).
 }
 
-/**
- * Book a viewing slot on behalf of the Line user: validate the slot is still
- * open + future, upsert the tenant, create a 'requested' viewing, atomically
- * mark the slot booked, and send a confirmation. The confirmation rides the
- * FREE reply path (postback events carry a reply token). The admin-group alert
- * is a metered push (no token) — it's admin-side awareness. All best-effort.
- */
-async function bookSlot(lineUserId, slotId, replyToken = null) {
-  const slot = await viewingSlots.findById(slotId)
-  const now = Date.now()
-  if (!slot || slot.status !== 'open' || new Date(slot.startsAt).getTime() < now) {
-    await lineMessaging.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ เวลาที่เลือกไม่สามารถจองได้แล้ว รบกวนเลือกช่วงอื่นนะคะ')
-    return
-  }
-
-  let tenant = await findTenantByLineId(lineUserId)
-  if (!tenant) tenant = await createTenantFromBot(lineUserId)
-
-  const viewing = await createForTenant({
-    roomId:           slot.roomId,
-    tenantId:         tenant.id,
-    tenantLineUserId: lineUserId,
-    scheduledFor:     slot.startsAt,
-    note:             null,
-  })
-  if (!viewing) {
-    await lineMessaging.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ จองไม่สำเร็จ กรุณาลองอีกครั้งนะคะ')
-    return
-  }
-
-  // Atomically claim the slot; if two users raced, the loser's viewing is voided.
-  const booked = await viewingSlots.markBooked(slot.id, viewing.id)
-  if (!booked) {
-    await lineMessaging.replyOrPush(lineUserId, replyToken, 'ขออภัยค่ะ เวลานี้ถูกจองไปแล้ว รบกวนเลือกช่วงอื่นนะคะ')
-    return
-  }
-
-  const room = await findRoomById(slot.roomId)
-  await lineMessaging.replyOrPush(lineUserId, replyToken, viewingConfirmation({
-    roomTitle:    room?.title,
-    scheduledFor: bangkokDisplay(slot.startsAt),
-    viewingId:    viewing.id,
-  }))
-  logger.info({ lineUserId, roomId: slot.roomId, viewingId: viewing.id, slotId }, 'slot booked via postback')
-  notifyAdminGroup(`📅 [จองนัดชม]\nลูกค้าจองนัดชมห้อง "${room?.title ?? ''}" เวลา ${bangkokDisplay(slot.startsAt)}\nสถานะ: รอแอดมินยืนยัน\n— ยืนยัน/ปฏิเสธได้ที่ /admin/viewings`)
-}
 
 function bangkokDisplay(iso) {
   try {
