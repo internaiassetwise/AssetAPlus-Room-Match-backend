@@ -55,6 +55,40 @@ export async function latestForUser(lineUserId, { withinMinutes } = {}) {
   }
 }
 
+/**
+ * Every room this person has asked about, newest first.
+ *
+ * The inbox needs the LIST, not just the latest: someone comparing three rooms
+ * produces three entries, and the transcript shows three near-identical cards
+ * whose customer-facing labels are masked. Without the times and full room
+ * numbers here, "which room are they talking about" is unanswerable once more
+ * than one is involved.
+ */
+export async function recentForUser(lineUserId, { limit = 8 } = {}) {
+  if (!lineUserId) return []
+  const { rows } = await query(
+    `SELECT DISTINCT ON (i.room_id)
+            i.room_id, i.created_at,
+            r.title, r.room_code, r.monthly_rent, r.status,
+            z.name_th AS zone
+       FROM room_interest i
+       JOIN rooms r ON r.id = i.room_id
+       LEFT JOIN zones z ON z.id = r.zone_id
+      WHERE i.line_user_id = $1
+      ORDER BY i.room_id, i.created_at DESC`,
+    [lineUserId],
+  )
+  return rows
+    .map((r) => ({
+      roomId: r.room_id, title: r.title, roomCode: r.room_code,
+      monthlyRent: r.monthly_rent, status: r.status, zone: r.zone,
+      askedAt: r.created_at,
+    }))
+    // DISTINCT ON forces ordering by room_id first, so sort by time here.
+    .sort((a, b) => new Date(b.askedAt) - new Date(a.askedAt))
+    .slice(0, limit)
+}
+
 /** Interest counts per room, most-asked first — feeds the admin dashboard. */
 export async function countsByRoom({ limit = 20, sinceDays = 30 } = {}) {
   const { rows } = await query(

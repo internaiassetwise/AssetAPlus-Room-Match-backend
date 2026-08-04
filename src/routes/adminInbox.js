@@ -110,18 +110,19 @@ adminInbox.get('/conversations', requireAdmin, asyncHandler(async (req, res) => 
  */
 adminInbox.get('/conversations/:lineUserId', requireAdmin, asyncHandler(async (req, res) => {
   const lineUserId = String(req.params.lineUserId)
-  const [transcript, ticket, room] = await Promise.all([
+  const [transcript, ticket, rooms] = await Promise.all([
     lineLogs.loadTranscript(lineUserId).catch(() => []),
     repo.findOpenByLineUser(lineUserId).catch(() => null),
-    // Which room they tapped "สอบถามห้องนี้" on, if any — so admin opens the
-    // chat already knowing what it's about instead of having to ask.
-    roomInterest.latestForUser(lineUserId).catch(() => null),
+    // Every room they tapped "สอบถามห้องนี้" on — the list, not just the last
+    // one. The transcript's room cards are masked for the customer, so this is
+    // where admin reads the actual unit numbers.
+    roomInterest.recentForUser(lineUserId, { limit: 8 }).catch(() => []),
   ])
   res.json({
     lineUserId,
     transcript: transcript || [],
     ticket: ticket ? await withLiveOne(ticket) : null,
-    room,
+    rooms,
   })
 }))
 
