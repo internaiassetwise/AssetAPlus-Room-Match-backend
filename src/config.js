@@ -91,6 +91,11 @@ const schema = z.object({
   // extracting fields from chat — the landlord completes the form in Line and
   // it submits straight to /api/liff/listing/submit.
   LIFF_LISTING_ID:    z.string().optional(),
+  // LIFF app for the "สอบถามห้องนี้" page. When set, the room page links here
+  // instead of building a line.me message: the page resolves who the customer
+  // is from their LIFF token, so nothing about the room has to ride visibly in
+  // the message they send.
+  LIFF_ASK_ID:        z.string().optional(),
 
   // LINE Login (web OAuth) for tenants + landlords. Shares the same LINE Login
   // channel as the LIFF listing form. When set, /auth/line/start logs a user in

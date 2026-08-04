@@ -12,7 +12,7 @@ import { AppError } from '../middleware/AppError.js'
 import { requireAdmin, readCookie, ADMIN_COOKIE } from '../middleware/requireAdmin.js'
 import { findSession as findAdminSession } from '../db/repositories/admins.repo.js'
 import { logger } from '../logger.js'
-import { UPLOADS_DIR } from '../config.js'
+import { UPLOADS_DIR, config } from '../config.js'
 import * as lineMessaging from '../linebot/lineMessaging.service.js'
 import { makeRoomRef } from '../services/roomRef.js'
 import { getBotBasicId } from '../linebot/lineMessaging.service.js'
@@ -245,6 +245,19 @@ rooms.get('/:id/ask-link', validate({ params: idParam }), asyncHandler(async (re
   if (!room || room.status !== 'available') {
     throw new AppError(404, 'ROOM_NOT_FOUND', 'ไม่พบห้องนี้')
   }
+  // Method B when a LIFF app is configured: the customer lands on a page that
+  // knows who they are, so the room is recorded against their verified id and
+  // their message carries nothing about it. Falls back to the line.me message
+  // (method A) so the button still works before the LIFF app exists.
+  if (config.LIFF_ASK_ID) {
+    return res.json({
+      available: true,
+      mode: 'liff',
+      url: `https://liff.line.me/${config.LIFF_ASK_ID}?roomId=${room.id}`,
+      text: null,
+    })
+  }
+
   const basicId = await getBotBasicId()
   if (!basicId) {
     // LINE not configured / unreachable — the page hides the button rather
@@ -259,6 +272,7 @@ rooms.get('/:id/ask-link', validate({ params: idParam }), asyncHandler(async (re
   const text = `สนใจสอบถามห้อง ${label}${suffix} ค่ะ/ครับ (${makeRoomRef(room.id)})`
   res.json({
     available: true,
+    mode: 'message',
     url: `https://line.me/R/oaMessage/${encodeURIComponent(basicId)}/?${encodeURIComponent(text)}`,
     text,
   })

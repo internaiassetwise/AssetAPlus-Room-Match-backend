@@ -21,6 +21,10 @@ import { resizeForWeb } from '../services/imageResize.service.js'
 import { config } from '../config.js'
 import * as landlords   from '../db/repositories/landlords.repo.js'
 import { findByName }   from '../db/repositories/zones.repo.js'
+import * as roomsRepo   from '../db/repositories/rooms.repo.js'
+import * as roomInterest from '../db/repositories/roomInterest.repo.js'
+import { getBotBasicId } from '../linebot/lineMessaging.service.js'
+import { maskCodeInText } from '../linebot/roomCode.js'
 import { ZONE_PROJECTS, ZONE_NAMES, ROOM_TYPES } from '../data/projects.js'
 import * as rooms       from '../db/repositories/rooms.repo.js'
 import * as roomImages  from '../db/repositories/roomImages.repo.js'
@@ -382,6 +386,131 @@ liff.get('/listing', (req, res) => {
   res.set('Content-Type', 'text/html; charset=utf-8')
   res.send(renderListingHtml(config.LIFF_LISTING_ID, submitUrl))
 })
+
+// ─────────────────── "สอบถามห้องนี้" LIFF page (method B) ───────────────────
+//
+// The customer taps this on a room page. Opened inside LINE, LIFF tells us who
+// they are — so the room is recorded server-side against their verified id and
+// NOTHING about it has to ride visibly in the message they send. That is the
+// whole point over the earlier link-with-a-tag approach: no code in the chat,
+// and nothing for them to accidentally delete before sending.
+//
+//   GET  /ask?roomId=123   — the page (auto-submits, no UI to speak of)
+//   POST /ask/record       — { roomId } + X-Liff-Token → records room_interest
+
+function renderAskHtml(liffId, recordUrl, roomId, roomLabel, oaBasicId) {
+  return `<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>สอบถามห้อง</title>
+  <style>
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+           background:#FDFBF5; color:#1F2937; display:grid; place-items:center; min-height:100dvh; padding:24px; }
+    .box { text-align:center; max-width:340px; }
+    h1 { font-size:18px; margin:0 0 8px; color:#1F4068; }
+    p  { font-size:14px; color:#6B7280; margin:0 0 20px; line-height:1.6; }
+    .spin { width:28px; height:28px; margin:0 auto 16px; border:3px solid #E5E7EB;
+            border-top-color:#1F4068; border-radius:50%; animation:s 0.8s linear infinite; }
+    @keyframes s { to { transform:rotate(360deg); } }
+    .btn { display:inline-block; background:#06C755; color:#fff; text-decoration:none;
+           padding:12px 20px; border-radius:10px; font-weight:600; min-height:44px; line-height:20px; }
+    .err { color:#B45309; font-size:13px; }
+  </style>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+</head>
+<body>
+  <div class="box">
+    <div class="spin" id="spin"></div>
+    <h1 id="title">กำลังเชื่อมต่อ…</h1>
+    <p id="msg">${roomLabel}</p>
+    <div id="fallback"></div>
+  </div>
+  <script>
+    var LIFF_ID = ${JSON.stringify(liffId || '')};
+    var RECORD_URL = ${JSON.stringify(recordUrl)};
+    var ROOM_ID = ${JSON.stringify(roomId)};
+    var OA = ${JSON.stringify(oaBasicId || '')};
+    var TEXT = ${JSON.stringify('สนใจสอบถามห้องนี้ค่ะ/ครับ')};
+
+    function show(title, msg, showLink) {
+      document.getElementById('spin').style.display = 'none';
+      document.getElementById('title').textContent = title;
+      document.getElementById('msg').textContent = msg;
+      if (showLink && OA) {
+        document.getElementById('fallback').innerHTML =
+          '<a class="btn" href="https://line.me/R/oaMessage/' + encodeURIComponent(OA) + '/?' +
+          encodeURIComponent(TEXT) + '">เปิดแชท Line</a>';
+      }
+    }
+
+    (async function () {
+      try {
+        if (!LIFF_ID) throw new Error('no-liff-id');
+        await liff.init({ liffId: LIFF_ID });
+        if (!liff.isLoggedIn()) { liff.login(); return; }
+
+        // Record FIRST: this is the whole reason the page exists, and it must
+        // survive the customer closing the window before the message goes out.
+        await fetch(RECORD_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Liff-Token': liff.getAccessToken() },
+          body: JSON.stringify({ roomId: ROOM_ID }),
+        });
+
+        // Post the message for them when LINE allows it, so the chat opens with
+        // the question already asked rather than a blank box.
+        if (liff.isInClient() && liff.sendMessages) {
+          try {
+            await liff.sendMessages([{ type: 'text', text: TEXT }]);
+            liff.closeWindow();
+            return;
+          } catch (e) { /* scope not granted — fall through to the link */ }
+        }
+        show('เรียบร้อยแล้ว', 'กดปุ่มด้านล่างเพื่อเปิดแชทได้เลยค่ะ', true);
+      } catch (e) {
+        // Never a dead end: the customer can still reach the OA by hand.
+        show('เปิดแชทเพื่อสอบถาม', 'กดปุ่มด้านล่างเพื่อคุยกับแอดมินได้เลยค่ะ', true);
+      }
+    })();
+  </script>
+</body>
+</html>`
+}
+
+liff.get('/ask', asyncHandler(async (req, res) => {
+  const roomId = Number(req.query.roomId)
+  const room = Number.isInteger(roomId) ? await roomsRepo.findById(roomId) : null
+  if (!room) throw new AppError(404, 'ROOM_NOT_FOUND', 'ไม่พบห้องนี้')
+  // Masked, like everywhere else the customer can see it.
+  const label = maskCodeInText(room.title, room.roomCode) || 'ห้องเช่า'
+  res.set('Content-Type', 'text/html; charset=utf-8')
+  res.send(renderAskHtml(
+    config.LIFF_ASK_ID,
+    `${req.baseUrl}/ask/record`,
+    roomId,
+    label,
+    await getBotBasicId(),
+  ))
+}))
+
+liff.post('/ask/record',
+  rateLimit({ windowMs: 60_000, max: 30 }),
+  asyncHandler(async (req, res) => {
+    const lineUserId = await verifyLiffToken(req.get('X-Liff-Token'))
+    const roomId = Number(req.body?.roomId)
+    if (!Number.isInteger(roomId)) throw new AppError(400, 'BAD_ROOM', 'roomId ไม่ถูกต้อง')
+    // Best-effort: a deleted room trips the FK, and that must not fail the tap.
+    try {
+      await roomInterest.record({ lineUserId, roomId, source: 'liff' })
+      logger.info({ lineUserId, roomId }, 'room interest recorded from LIFF')
+    } catch (err) {
+      logger.warn({ err: err.message, lineUserId, roomId }, 'room interest not recorded')
+    }
+    res.json({ ok: true })
+  }),
+)
 
 // POST /listing/submit — receive the form, create a pending room + photos.
 // Photos arrive as multipart/form-data field "photos" (max 10, images only).
