@@ -1,5 +1,8 @@
-// src/services/imageResize.service.js — Resize uploaded room photos to a
-// web-friendly size before writing to disk.
+// src/services/imageResize.service.js — Prepare uploaded room photos for the
+// web before writing to disk: resize, then watermark.
+//
+// This is the one path both upload routes call, which is deliberate — it is
+// the choke point that guarantees no photo reaches the volume unmarked.
 //
 // Phone cameras produce 3-10 MB JPEGs (4000+ px). Serving those on the
 // landing page causes visible lag — the browser downloads and decodes
@@ -8,6 +11,7 @@
 // ~200-500 KB with no visible quality loss on screen.
 
 import sharp from 'sharp'
+import { applyWatermark } from './watermark.service.js'
 
 const MAX_WIDTH  = 1200
 const MAX_HEIGHT = 1200
@@ -25,11 +29,15 @@ const QUALITY    = 82   // sweet spot — visually identical, ~60% smaller than 
 export async function resizeForWeb(buffer) {
   if (!buffer || !Buffer.isBuffer(buffer) || buffer.length < 12) return buffer
   try {
-    return await sharp(buffer)
+    const resized = await sharp(buffer)
       .rotate()                     // auto-orient from EXIF (phone photos)
       .resize(MAX_WIDTH, MAX_HEIGHT, { fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality: QUALITY, mozjpeg: true })
       .toBuffer()
+    // Watermark last, so the handle is sized against the dimensions we actually
+    // ship rather than whatever the phone produced. Both upload routes funnel
+    // through here, which is what keeps any single photo from escaping unmarked.
+    return await applyWatermark(resized)
   } catch (err) {
     // sharp can't process this file — return the original so the upload
     // still succeeds (the detectImageExt check already validated it's an image).

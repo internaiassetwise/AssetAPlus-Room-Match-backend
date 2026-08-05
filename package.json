@@ -9,7 +9,10 @@
     "start": "node src/db/init.js && node src/server.js",
     "dev": "node --watch src/server.js",
     "db:init": "node src/db/init.js",
-    "db:reset": "node src/db/init.js --reset"
+    "db:reset": "node src/db/init.js --reset",
+    "images:watermark": "node scripts/watermark-existing.js",
+    "images:watermark:dry": "node scripts/watermark-existing.js --dry-run",
+    "images:build-mark": "node scripts/build-watermark.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
