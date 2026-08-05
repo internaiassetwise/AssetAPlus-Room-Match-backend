@@ -3,6 +3,7 @@
 //
 //   node scripts/watermark-existing.js --dry-run   # report only, touch nothing
 //   node scripts/watermark-existing.js             # rewrite in place
+//   node scripts/watermark-existing.js --force     # redo after a style change
 //
 // Must run where the uploads volume is mounted (inside the Railway container,
 // via `railway ssh`) — `railway run` executes locally and would happily report
@@ -19,7 +20,11 @@ import path from 'node:path'
 import { UPLOADS_DIR } from '../src/config.js'
 import { applyWatermark } from '../src/services/watermark.service.js'
 
-const DRY = process.argv.includes('--dry-run')
+const DRY   = process.argv.includes('--dry-run')
+// Redo photos that were already marked — needed whenever the mark's style
+// changes. Safe because the work always starts from the pristine original, so
+// re-running can never stack a second mark on top of the first.
+const FORCE = process.argv.includes('--force')
 
 const ROOMS     = path.join(UPLOADS_DIR, 'rooms')
 const ORIGINALS = path.join(UPLOADS_DIR, 'originals', 'rooms')
@@ -46,10 +51,14 @@ for await (const file of walk(ROOMS)) {
   const rel    = path.relative(ROOMS, file)
   const backup = path.join(ORIGINALS, rel)
 
-  if (await exists(backup)) { stats.skipped++; continue }
+  const backedUp = await exists(backup)
+  if (backedUp && !FORCE) { stats.skipped++; continue }
 
   try {
-    const before = await fs.readFile(file)
+    // Always mark the PRISTINE image. Reading the on-disk file under --force
+    // would feed an already-marked photo back through and stack a second
+    // pattern on top of the first.
+    const before = await fs.readFile(backedUp ? backup : file)
     const after  = await applyWatermark(before)
 
     // applyWatermark returns the input untouched when it bails (too small,
@@ -61,8 +70,10 @@ for await (const file of walk(ROOMS)) {
     stats.bytesAfter  += after.length
 
     if (!DRY) {
-      await fs.mkdir(path.dirname(backup), { recursive: true })
-      await fs.writeFile(backup, before)   // backup first — never the other way round
+      if (!backedUp) {
+        await fs.mkdir(path.dirname(backup), { recursive: true })
+        await fs.writeFile(backup, before)   // backup first — never the other way round
+      }
       await fs.writeFile(file, after)
     }
     stats.done++

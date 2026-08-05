@@ -18,19 +18,24 @@ import { fileURLToPath } from 'node:url'
 const HANDLE = '@aswroommatch'
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'assets', 'watermark.png')
 
-// White text with a soft dark shadow: the shadow is what keeps it legible on
-// pale photos (white walls, bright windows), which is most listing shots.
+// Rendered at FULL opacity. The tiling step scales the alpha down at runtime,
+// which keeps "how visible is it" a one-line tweak in the service instead of a
+// reason to regenerate and re-commit this asset.
+//
+// The thin dark shadow is not decoration — tiled marks cross both white walls
+// and dark furniture in the same photo, and plain white text disappears against
+// the ceiling. The shadow is what makes one opacity work everywhere.
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="300">
   <defs>
     <filter id="sh" x="-25%" y="-25%" width="150%" height="150%">
-      <feDropShadow dx="0" dy="4" stdDeviation="9" flood-color="#000" flood-opacity="0.6"/>
+      <feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#000" flood-opacity="0.85"/>
     </filter>
   </defs>
   <text x="800" y="200"
         text-anchor="middle"
         font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif"
         font-size="140" font-weight="700" letter-spacing="2"
-        fill="#ffffff" fill-opacity="0.92"
+        fill="#ffffff"
         filter="url(#sh)">${HANDLE}</text>
 </svg>`
 

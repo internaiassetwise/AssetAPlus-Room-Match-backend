@@ -12,7 +12,8 @@
     "db:reset": "node src/db/init.js --reset",
     "images:watermark": "node scripts/watermark-existing.js",
     "images:watermark:dry": "node scripts/watermark-existing.js --dry-run",
-    "images:build-mark": "node scripts/build-watermark.js"
+    "images:build-mark": "node scripts/build-watermark.js",
+    "images:watermark:force": "node scripts/watermark-existing.js --force"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

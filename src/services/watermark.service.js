@@ -8,6 +8,11 @@
 // Applied at upload, which means it reaches every consumer of a photo at once:
 // the web app, the LINE Flex carousels, and anything shared onward from either.
 //
+// TILED diagonally across the frame rather than sat in one corner. A corner mark
+// is one crop away from gone, which defeats the point. Tiling costs some of the
+// photo's clarity, so the alpha is kept low enough to read the room through it —
+// the mark only has to be legible in a screenshot, not dominant.
+//
 // The mark itself is a pre-rendered PNG (see scripts/build-watermark.js) —
 // runtime text rendering would need fonts we can't count on in the container.
 
@@ -18,31 +23,72 @@ import { logger } from '../logger.js'
 
 const MARK_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'watermark.png')
 
-// Share of the photo's width the mark spans. ~26% reads clearly on a phone
-// without covering the room — the thing people are actually here to look at.
-const WIDTH_RATIO = 0.26
-const MIN_WIDTH   = 90     // below this the handle is an illegible smudge
-const MARGIN_RATIO = 0.03
+const ANGLE       = -30    // degrees; diagonal reads as a watermark, not as a caption
+const WIDTH_RATIO = 0.16   // one mark spans ~16% of the photo width
+const OPACITY     = 0.22   // visible in a screenshot, still see-through
+// Tile pitch, in multiples of the rotated mark. Must stay >= 2: the staggered
+// copy sits at half the tile, so anything tighter pushes it past the canvas edge
+// and sharp throws. Denser coverage comes from a smaller WIDTH_RATIO instead.
+const GAP_X       = 2.1
+const GAP_Y       = 2.3
 
-// Photos smaller than this are thumbnails/avatars — marking them just defaces
-// them, and they're too small to be worth stealing.
+// Below this a tiled pattern is just noise over something too small to steal.
 const MIN_PHOTO_WIDTH = 320
 
-// The resized mark is reused across uploads of the same width, which is the
-// common case (everything is capped to 1200px wide).
-const cache = new Map()
+// Building a tile means rotate + composite + alpha-scale, so it is cached per
+// photo width. Uploads are all capped to 1200px, so this is near-always a hit.
+const tileCache = new Map()
 
-async function markAtWidth(width) {
-  if (cache.has(width)) return cache.get(width)
-  const buf = await sharp(MARK_PATH).resize({ width }).png().toBuffer()
-  const { height } = await sharp(buf).metadata()
-  const entry = { buf, height }
-  cache.set(width, entry)
-  return entry
+/**
+ * A transparent tile carrying two offset copies of the mark, so tiling produces
+ * a staggered brick layout instead of a rigid grid (rigid grids read as a
+ * texture and are easier to inpaint out).
+ */
+async function buildTile(photoWidth) {
+  const cached = tileCache.get(photoWidth)
+  if (cached) return cached
+
+  const markWidth = Math.round(photoWidth * WIDTH_RATIO)
+  const rotated = await sharp(MARK_PATH)
+    .resize({ width: markWidth })
+    .rotate(ANGLE, { background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .png()
+    .toBuffer()
+  const rot = await sharp(rotated).metadata()
+
+  const tileW = Math.round(rot.width * GAP_X)
+  const tileH = Math.round(rot.height * GAP_Y)
+
+  const tile = await sharp({
+    create: { width: tileW, height: tileH, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+  })
+    .composite([
+      { input: rotated, top: 0, left: 0 },
+      // Half-pitch offset — the stagger. GAP_* are >2 so this copy still fits.
+      { input: rotated, top: Math.round(tileH / 2), left: Math.round(tileW / 2) },
+    ])
+    .png()
+    .toBuffer()
+
+  // Scale the alpha down. `dest-in` multiplies the tile's alpha by the source's,
+  // so a flat translucent layer dims the whole thing uniformly — this is why the
+  // asset is stored at full opacity and toned here.
+  const faded = await sharp(tile)
+    .composite([{
+      input: Buffer.from([255, 255, 255, Math.round(255 * OPACITY)]),
+      raw: { width: 1, height: 1, channels: 4 },
+      tile: true,
+      blend: 'dest-in',
+    }])
+    .png()
+    .toBuffer()
+
+  tileCache.set(photoWidth, faded)
+  return faded
 }
 
 /**
- * Composite the handle into the bottom-right corner.
+ * Tile the handle across the photo.
  *
  * Returns the input unchanged on any failure. A watermark is worth less than an
  * upload: if sharp chokes on this particular file, the landlord should still get
@@ -57,20 +103,10 @@ export async function applyWatermark(buffer) {
     const { width, height } = await sharp(buffer).metadata()
     if (!width || !height || width < MIN_PHOTO_WIDTH) return buffer
 
-    const markWidth = Math.max(MIN_WIDTH, Math.round(width * WIDTH_RATIO))
-    const margin    = Math.round(width * MARGIN_RATIO)
-    const mark      = await markAtWidth(markWidth)
-
-    // Guard against a mark that can't fit (very wide-but-short panoramas):
-    // compositing outside the canvas throws and would cost us the upload.
-    if (markWidth + margin * 2 > width || mark.height + margin * 2 > height) return buffer
+    const tile = await buildTile(width)
 
     return await sharp(buffer)
-      .composite([{
-        input: mark.buf,
-        top:  height - mark.height - margin,
-        left: width - markWidth - margin,
-      }])
+      .composite([{ input: tile, tile: true, blend: 'over' }])
       .jpeg({ quality: 82, mozjpeg: true })
       .toBuffer()
   } catch (err) {
