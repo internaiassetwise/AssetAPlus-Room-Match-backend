@@ -5,14 +5,14 @@ import multer from 'multer'
 import * as repo from '../db/repositories/rooms.repo.js'
 import * as roomImages from '../db/repositories/roomImages.repo.js'
 import { detectImageExt } from '../services/fileSignature.service.js'
-import { resizeForWeb } from '../services/imageResize.service.js'
+import { saveRoomPhoto } from '../services/roomPhotoStore.service.js'
 import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { validate } from '../middleware/validate.js'
 import { AppError } from '../middleware/AppError.js'
 import { requireAdmin, readCookie, ADMIN_COOKIE } from '../middleware/requireAdmin.js'
 import { findSession as findAdminSession } from '../db/repositories/admins.repo.js'
 import { logger } from '../logger.js'
-import { UPLOADS_DIR, config } from '../config.js'
+import { config } from '../config.js'
 import * as lineMessaging from '../linebot/lineMessaging.service.js'
 import { makeRoomRef } from '../services/roomRef.js'
 import { getBotBasicId } from '../linebot/lineMessaging.service.js'
@@ -190,18 +190,9 @@ rooms.post('/:id/photos', requireAdmin, validate({ params: idParam }), photoUplo
       throw new AppError(400, 'BAD_IMAGE', 'ไฟล์ไม่ใช่รูปภาพที่รองรับ (รองรับ jpg/png/webp/gif)')
     }
 
-    // Resize before saving — phone photos are 3-10 MB; this drops them
-    // to ~300 KB (1200px max, JPEG q82) with no visible quality loss.
-    const optimized = await resizeForWeb(req.file.buffer)
-
-    const fs = await import('node:fs/promises')
-    const path = await import('node:path')
-    const crypto = await import('node:crypto')
-
-    const fileName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`
-    const dir = path.join(UPLOADS_DIR, 'rooms', String(roomId))
-    await fs.mkdir(dir, { recursive: true })
-    await fs.writeFile(path.join(dir, fileName), optimized)
+    // Resizes (phone photos are 3-10 MB), watermarks, and archives the
+    // unmarked copy so the mark stays a reversible decision.
+    const fileName = await saveRoomPhoto(roomId, req.file.buffer, ext)
 
     // Prefer the configured public origin (reliable behind a proxy); the
     // req.protocol fallback is correct now that `trust proxy` is set.

@@ -17,7 +17,7 @@ import { asyncHandler } from '../middleware/_asyncHandler.js'
 import { AppError }     from '../middleware/AppError.js'
 import { rateLimit }    from '../middleware/rateLimit.js'
 import { detectImageExt } from '../services/fileSignature.service.js'
-import { resizeForWeb } from '../services/imageResize.service.js'
+import { saveRoomPhoto } from '../services/roomPhotoStore.service.js'
 import { config } from '../config.js'
 import { logger } from '../logger.js'
 import * as landlords   from '../db/repositories/landlords.repo.js'
@@ -31,9 +31,6 @@ import { roomCarousel, menuQuickReply } from '../linebot/flexMessages.js'
 import { ZONE_PROJECTS, ZONE_NAMES, ROOM_TYPES } from '../data/projects.js'
 import * as rooms       from '../db/repositories/rooms.repo.js'
 import * as roomImages  from '../db/repositories/roomImages.repo.js'
-import fs from 'node:fs/promises'
-import path from 'node:path'
-import crypto from 'node:crypto'
 import { notifyAdminGroup } from '../linebot/adminAlert.service.js'
 
 export const liff = Router()
@@ -654,16 +651,12 @@ liff.post('/listing/submit',
   // Persist each uploaded photo under uploads/rooms/{roomId}/ and record it.
   // Same naming + URL pattern as the bot photo path in my-listings.js.
   if (req.files && req.files.length) {
-    const dir = path.join(process.cwd(), 'uploads', 'rooms', String(room.id))
-    await fs.mkdir(dir, { recursive: true })
     for (const file of req.files) {
       // Ext from actual bytes, not the client mimetype/filename (content-type
       // confusion → stored XSS). Skip anything that isn't a supported image.
       const ext = detectImageExt(file.buffer)
       if (!ext) continue
-      const optimized = await resizeForWeb(file.buffer)
-      const fileName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`
-      await fs.writeFile(path.join(dir, fileName), optimized)
+      const fileName = await saveRoomPhoto(room.id, file.buffer, ext)
       const origin = (config.APP_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '')
       const publicUrl = `${origin}/uploads/rooms/${room.id}/${fileName}`
       await roomImages.create(room.id, publicUrl, fileName)

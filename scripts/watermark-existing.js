@@ -30,6 +30,23 @@ const ROOMS     = path.join(UPLOADS_DIR, 'rooms')
 const ORIGINALS = path.join(UPLOADS_DIR, 'originals', 'rooms')
 const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif'])
 
+// When watermark-on-upload went live. Uploads are named `${Date.now()}-hex.ext`,
+// so the filename says when a photo arrived.
+//
+// This exists to catch a one-off hole: photos uploaded AFTER watermarking
+// started but BEFORE uploads began archiving an unmarked original were marked in
+// place with no pristine copy anywhere. Treating those as source material would
+// stamp a second mark on top of the first and then save that double-marked file
+// as their "original" — unrecoverable. So: no archive + arrived after this
+// instant means already marked, and the only way to restyle it is to re-upload.
+const WATERMARKING_LIVE_AT = Date.parse('2026-08-05T09:10:44Z')
+
+/** Upload time from the filename, or null if it doesn't follow the convention. */
+function uploadedAt(fileName) {
+  const ts = Number(fileName.split('-')[0])
+  return Number.isFinite(ts) && ts > 1e12 ? ts : null
+}
+
 async function exists(p) {
   try { await fs.access(p); return true } catch { return false }
 }
@@ -44,7 +61,10 @@ async function* walk(dir) {
   }
 }
 
-const stats = { seen: 0, done: 0, skipped: 0, failed: 0, bytesBefore: 0, bytesAfter: 0 }
+const stats = {
+  seen: 0, done: 0, skipped: 0, failed: 0, bytesBefore: 0, bytesAfter: 0,
+  alreadyMarked: 0, alreadyMarkedFiles: [],
+}
 
 for await (const file of walk(ROOMS)) {
   stats.seen++
@@ -53,6 +73,15 @@ for await (const file of walk(ROOMS)) {
 
   const backedUp = await exists(backup)
   if (backedUp && !FORCE) { stats.skipped++; continue }
+
+  // No archive, but it arrived after we started marking on upload → the file on
+  // disk is already marked and there is no clean copy to work from.
+  const at = uploadedAt(path.basename(file))
+  if (!backedUp && at && at >= WATERMARKING_LIVE_AT) {
+    stats.alreadyMarked++
+    stats.alreadyMarkedFiles.push(rel)
+    continue
+  }
 
   try {
     // Always mark the PRISTINE image. Reading the on-disk file under --force
@@ -91,5 +120,11 @@ ${DRY ? 'DRY RUN — nothing written' : 'Done'}
   watermarked : ${stats.done}
   skipped     : ${stats.skipped}  (already backed up, or too small to mark)
   failed      : ${stats.failed}
+${stats.alreadyMarked ? `
+  ${stats.alreadyMarked} photo(s) were marked at upload before originals were archived,
+  so there is no clean copy to restyle from. Left untouched rather than
+  double-marked. Re-upload these to get the current style:
+${stats.alreadyMarkedFiles.map((f) => `    ${f}`).join('\n')}
+` : ''}
   size        : ${(stats.bytesBefore / 1e6).toFixed(1)} MB -> ${(stats.bytesAfter / 1e6).toFixed(1)} MB
 ${stats.done && !DRY ? `\n  originals kept in ${ORIGINALS}\n  to undo: cp -r ${ORIGINALS}/. ${ROOMS}/` : ''}`)

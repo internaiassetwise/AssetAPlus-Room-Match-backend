@@ -18,29 +18,54 @@ const MAX_HEIGHT = 1200
 const QUALITY    = 82   // sweet spot — visually identical, ~60% smaller than 100
 
 /**
- * Resize an image buffer to fit within MAX_WIDTH × MAX_HEIGHT (maintains
- * aspect ratio, never upscales). Output is always JPEG for consistency
- * (PNG/WebP/GIF inputs are converted). Returns the original buffer
- * unchanged if sharp fails (e.g., animated GIF, corrupt header).
- *
- * @param {Buffer} buffer  Raw image bytes from multer
- * @returns {Promise<Buffer>} Optimized JPEG buffer
+ * Resize to fit within MAX_WIDTH × MAX_HEIGHT (maintains aspect ratio, never
+ * upscales). Output is always JPEG for consistency (PNG/WebP/GIF inputs are
+ * converted). Returns the original buffer unchanged if sharp fails (e.g.
+ * animated GIF, corrupt header).
  */
-export async function resizeForWeb(buffer) {
+async function resizeOnly(buffer) {
   if (!buffer || !Buffer.isBuffer(buffer) || buffer.length < 12) return buffer
   try {
-    const resized = await sharp(buffer)
+    return await sharp(buffer)
       .rotate()                     // auto-orient from EXIF (phone photos)
       .resize(MAX_WIDTH, MAX_HEIGHT, { fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality: QUALITY, mozjpeg: true })
       .toBuffer()
-    // Watermark last, so the handle is sized against the dimensions we actually
-    // ship rather than whatever the phone produced. Both upload routes funnel
-    // through here, which is what keeps any single photo from escaping unmarked.
-    return await applyWatermark(resized)
-  } catch (err) {
+  } catch {
     // sharp can't process this file — return the original so the upload
     // still succeeds (the detectImageExt check already validated it's an image).
     return buffer
   }
+}
+
+/**
+ * Produce both versions of an upload:
+ *   web      — resized + watermarked, what gets served
+ *   pristine — resized, NO watermark, archived to uploads/originals/
+ *
+ * Keeping the pristine copy is what makes the watermark a reversible decision.
+ * Photos uploaded before this existed were marked in place with no archive, so
+ * when the mark's style changed there was no way to re-derive them — the only
+ * options were to leave them on the old style or stack a second mark on top.
+ * Archiving here means any future restyle is just a --force backfill.
+ *
+ * @param {Buffer} buffer  Raw image bytes from multer
+ * @returns {Promise<{web: Buffer, pristine: Buffer}>}
+ */
+export async function prepareForWeb(buffer) {
+  const pristine = await resizeOnly(buffer)
+  // Watermark last, so the handle is sized against the dimensions we actually
+  // ship rather than whatever the phone produced.
+  const web = await applyWatermark(pristine)
+  return { web, pristine }
+}
+
+/**
+ * Back-compat shape for callers that only want the served bytes.
+ * @param {Buffer} buffer
+ * @returns {Promise<Buffer>} Optimized, watermarked JPEG
+ */
+export async function resizeForWeb(buffer) {
+  const { web } = await prepareForWeb(buffer)
+  return web
 }
