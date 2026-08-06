@@ -46,6 +46,16 @@ const PRIVATE = new Set([
 // Above this, a "category" is really free text — print shape, not values.
 const MAX_DISTINCT = 40
 
+// ── Import rules, as given ────────────────────────────────────────────────
+// Only rental stock, and only rows that are actually rentable today.
+const RENT_MARKER = 'ฝากเช่า'
+// Sale-pipeline statuses. A unit awaiting transfer or a bank decision is not
+// available to let, and listing one would send tenants at a room that is gone.
+const EXCLUDED_STATUS = ['รอโอน', 'รอผลแบงค์']
+
+const norm = (s) => String(s ?? '').replace(/\s+/g, '').trim()
+const isExcludedStatus = (v) => EXCLUDED_STATUS.some((x) => norm(v).includes(norm(x)))
+
 const wb = new ExcelJS.Workbook()
 await wb.xlsx.readFile(file)
 
@@ -73,7 +83,37 @@ for (const ws of wb.worksheets) {
     })
   })
 
+  // Which reading of "the sheet that has ฝากเช่า" applies is decided here, from
+  // the data, so nobody has to guess: does the sheet NAME say it, or does some
+  // column carry it as a value (a ฝากเช่า/ฝากขาย flag)?
+  const nameSaysRent = norm(ws.name).includes(norm(RENT_MARKER))
+  const markerCols = [...cols.entries()]
+    .filter(([, c]) => [...c.values.keys()].some((v) => norm(v).includes(norm(RENT_MARKER))))
+    .map(([h, c]) => {
+      const hits = [...c.values.entries()]
+        .filter(([v]) => norm(v).includes(norm(RENT_MARKER)))
+        .reduce((n, [, k]) => n + k, 0)
+      return `${h} (${hits} rows)`
+    })
+
+  const statusCol = cols.get('Status')
+  const excluded = statusCol
+    ? [...statusCol.values.entries()].filter(([v]) => isExcludedStatus(v))
+    : []
+  const excludedRows = excluded.reduce((n, [, k]) => n + k, 0)
+  const dataRows = Math.max(0, ws.rowCount - 1)
+
   console.log(`── ${ws.name} ─────────────────────────────────`)
+  console.log(`  sheet name says "${RENT_MARKER}": ${nameSaysRent ? 'YES' : 'no'}`)
+  console.log(`  columns containing "${RENT_MARKER}": ${markerCols.length ? markerCols.join(', ') : 'none'}`)
+  if (statusCol) {
+    console.log(`  rows: ${dataRows}  |  excluded by status (${EXCLUDED_STATUS.join(' / ')}): ${excludedRows}`
+      + `  |  would import: ${dataRows - excludedRows}`)
+    if (excluded.length) console.log(`      excluded values seen: ${excluded.map(([v, n]) => `${v}×${n}`).join('  |  ')}`)
+  } else {
+    console.log(`  rows: ${dataRows}  |  no "Status" column on this sheet`)
+  }
+  console.log('')
   for (const [h, c] of cols) {
     const fill = c.total ? Math.round((c.filled / c.total) * 100) : 0
     const distinct = c.values.size
