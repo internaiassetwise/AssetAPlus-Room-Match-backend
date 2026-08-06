@@ -3,6 +3,8 @@
 //   node scripts/watermark-existing.js --dry-run   # report only, touch nothing
 //   node scripts/watermark-existing.js             # rewrite in place
 //   node scripts/watermark-existing.js --force     # redo after a style change
+//   node scripts/watermark-existing.js --reclaim   # also fix photos marked at
+//                                                  # upload (crops the old mark off)
 //
 // Must run where the uploads volume is mounted (inside the Railway container,
 // via `railway ssh`) — `railway run` executes locally and would happily report
@@ -14,11 +16,13 @@ import { runBackfill, paths } from '../src/services/watermarkBackfill.service.js
 
 const dryRun = process.argv.includes('--dry-run')
 const force  = process.argv.includes('--force')
+const reclaim = process.argv.includes('--reclaim')
 
 let lastLogged = 0
 const stats = await runBackfill({
   dryRun,
   force,
+  reclaim,
   onProgress: (s) => {
     if (s.done >= lastLogged + 25) { lastLogged = s.done; console.log(`  …${s.done} watermarked`) }
   },

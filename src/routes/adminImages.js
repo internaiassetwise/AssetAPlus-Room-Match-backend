@@ -27,6 +27,7 @@ export const adminImages = Router()
 const startBody = z.object({
   dryRun: z.boolean().optional(),
   force:  z.boolean().optional(),
+  reclaim: z.boolean().optional(),
 })
 
 /** @type {null | {running:boolean, dryRun:boolean, force:boolean, startedAt:string, finishedAt:string|null, startedBy:string|null, error:string|null, stats:object}} */
@@ -44,6 +45,7 @@ function publicJob() {
       skipped:            stats.skipped,
       failed:             stats.failed,
       alreadyMarked:      stats.alreadyMarked,
+      reclaimed:          stats.reclaimed,
       alreadyMarkedFiles: stats.alreadyMarkedFiles.slice(0, 50),
       failures:           stats.failures.slice(0, 20),
     },
@@ -62,18 +64,19 @@ adminImages.post('/watermark', requireAdmin, validate({ body: startBody }),
 
     const dryRun = Boolean(req.body?.dryRun)
     const force  = Boolean(req.body?.force)
+    const reclaim = Boolean(req.body?.reclaim)
 
     job = {
-      running: true, dryRun, force,
+      running: true, dryRun, force, reclaim,
       startedAt: new Date().toISOString(),
       finishedAt: null,
       startedBy: req.admin?.displayName || req.admin?.username || null,
       error: null,
-      stats: { seen: 0, done: 0, skipped: 0, failed: 0, bytesBefore: 0, bytesAfter: 0, alreadyMarked: 0, alreadyMarkedFiles: [], failures: [] },
+      stats: { seen: 0, done: 0, skipped: 0, failed: 0, bytesBefore: 0, bytesAfter: 0, alreadyMarked: 0, alreadyMarkedFiles: [], failures: [], reclaimed: 0 },
     }
 
     // Deliberately not awaited — the response returns now and the client polls.
-    runBackfill({ dryRun, force, onProgress: (s) => { job.stats = s } })
+    runBackfill({ dryRun, force, reclaim, onProgress: (s) => { job.stats = s } })
       .then((stats) => {
         job.stats = stats
         logger.info({ ...stats, alreadyMarkedFiles: undefined, failures: undefined }, 'watermark backfill finished')
