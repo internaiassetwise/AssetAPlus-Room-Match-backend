@@ -19,6 +19,7 @@ import { faqs }           from './faqs.js'
 import { botInquiries }   from './botInquiries.js'
 import { adminStats } from './adminStats.js'
 import { adminInbox }     from './adminInbox.js'
+import { adminImages }    from './adminImages.js'
 import { adminViewings }  from './adminViewings.js'
 import { leads }          from './leads.js'
 import { tenants }        from './tenants.js'
@@ -54,6 +55,7 @@ apiRouter.use('/v1/line/debug',      lineDebug)
 apiRouter.use('/v1/admin/bot-inquiries', botInquiries)
 apiRouter.use('/v1/admin/stats',         adminStats)
 apiRouter.use('/v1/admin/inbox',         adminInbox)
+apiRouter.use('/v1/admin/images',        adminImages)
 apiRouter.use('/v1/admin/viewings',      adminViewings)
 apiRouter.use('/v1/leads',          leads)
 apiRouter.use('/v1/tenants',        tenants)
@@ -80,6 +82,7 @@ apiRouter.use('/line/debug',      lineDebug)
 apiRouter.use('/admin/bot-inquiries',   botInquiries)
 apiRouter.use('/admin/stats',           adminStats)
 apiRouter.use('/admin/inbox',           adminInbox)
+apiRouter.use('/admin/images',          adminImages)
 apiRouter.use('/admin/viewings',        adminViewings)
 apiRouter.use('/leads',           leads)
 apiRouter.use('/tenants',         tenants)

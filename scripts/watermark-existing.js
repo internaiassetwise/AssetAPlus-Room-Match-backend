@@ -1,5 +1,4 @@
-// scripts/watermark-existing.js — stamp the handle into photos that were
-// uploaded before watermarking existed.
+// scripts/watermark-existing.js — CLI wrapper around the watermark backfill.
 //
 //   node scripts/watermark-existing.js --dry-run   # report only, touch nothing
 //   node scripts/watermark-existing.js             # rewrite in place
@@ -7,118 +6,32 @@
 //
 // Must run where the uploads volume is mounted (inside the Railway container,
 // via `railway ssh`) — `railway run` executes locally and would happily report
-// "0 photos" against an empty directory.
-//
-// Every original is copied to uploads/originals/<same relative path> BEFORE it
-// is overwritten. That backup does double duty: watermarking is destructive and
-// otherwise unrecoverable, and its presence is also how a second run knows to
-// skip a file. So this is safe to re-run, and safe to undo by copying
-// originals/ back over rooms/.
+// "0 photos" against an empty directory. Admins can run the same job from the
+// admin panel instead; the logic lives in the service both call.
 
-import fs from 'node:fs/promises'
-import path from 'node:path'
 import { UPLOADS_DIR } from '../src/config.js'
-import { applyWatermark } from '../src/services/watermark.service.js'
+import { runBackfill, paths } from '../src/services/watermarkBackfill.service.js'
 
-const DRY   = process.argv.includes('--dry-run')
-// Redo photos that were already marked — needed whenever the mark's style
-// changes. Safe because the work always starts from the pristine original, so
-// re-running can never stack a second mark on top of the first.
-const FORCE = process.argv.includes('--force')
+const dryRun = process.argv.includes('--dry-run')
+const force  = process.argv.includes('--force')
 
-const ROOMS     = path.join(UPLOADS_DIR, 'rooms')
-const ORIGINALS = path.join(UPLOADS_DIR, 'originals', 'rooms')
-const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif'])
+let lastLogged = 0
+const stats = await runBackfill({
+  dryRun,
+  force,
+  onProgress: (s) => {
+    if (s.done >= lastLogged + 25) { lastLogged = s.done; console.log(`  …${s.done} watermarked`) }
+  },
+})
 
-// When watermark-on-upload went live. Uploads are named `${Date.now()}-hex.ext`,
-// so the filename says when a photo arrived.
-//
-// This exists to catch a one-off hole: photos uploaded AFTER watermarking
-// started but BEFORE uploads began archiving an unmarked original were marked in
-// place with no pristine copy anywhere. Treating those as source material would
-// stamp a second mark on top of the first and then save that double-marked file
-// as their "original" — unrecoverable. So: no archive + arrived after this
-// instant means already marked, and the only way to restyle it is to re-upload.
-const WATERMARKING_LIVE_AT = Date.parse('2026-08-05T09:10:44Z')
-
-/** Upload time from the filename, or null if it doesn't follow the convention. */
-function uploadedAt(fileName) {
-  const ts = Number(fileName.split('-')[0])
-  return Number.isFinite(ts) && ts > 1e12 ? ts : null
-}
-
-async function exists(p) {
-  try { await fs.access(p); return true } catch { return false }
-}
-
-async function* walk(dir) {
-  let entries
-  try { entries = await fs.readdir(dir, { withFileTypes: true }) } catch { return }
-  for (const e of entries) {
-    const full = path.join(dir, e.name)
-    if (e.isDirectory()) yield* walk(full)
-    else if (IMAGE_EXT.has(path.extname(e.name).toLowerCase())) yield full
-  }
-}
-
-const stats = {
-  seen: 0, done: 0, skipped: 0, failed: 0, bytesBefore: 0, bytesAfter: 0,
-  alreadyMarked: 0, alreadyMarkedFiles: [],
-}
-
-for await (const file of walk(ROOMS)) {
-  stats.seen++
-  const rel    = path.relative(ROOMS, file)
-  const backup = path.join(ORIGINALS, rel)
-
-  const backedUp = await exists(backup)
-  if (backedUp && !FORCE) { stats.skipped++; continue }
-
-  // No archive, but it arrived after we started marking on upload → the file on
-  // disk is already marked and there is no clean copy to work from.
-  const at = uploadedAt(path.basename(file))
-  if (!backedUp && at && at >= WATERMARKING_LIVE_AT) {
-    stats.alreadyMarked++
-    stats.alreadyMarkedFiles.push(rel)
-    continue
-  }
-
-  try {
-    // Always mark the PRISTINE image. Reading the on-disk file under --force
-    // would feed an already-marked photo back through and stack a second
-    // pattern on top of the first.
-    const before = await fs.readFile(backedUp ? backup : file)
-    const after  = await applyWatermark(before)
-
-    // applyWatermark returns the input untouched when it bails (too small,
-    // sharp error). Rewriting then would create a backup implying work was
-    // done and permanently skip the file on the next run.
-    if (after === before) { stats.skipped++; continue }
-
-    stats.bytesBefore += before.length
-    stats.bytesAfter  += after.length
-
-    if (!DRY) {
-      if (!backedUp) {
-        await fs.mkdir(path.dirname(backup), { recursive: true })
-        await fs.writeFile(backup, before)   // backup first — never the other way round
-      }
-      await fs.writeFile(file, after)
-    }
-    stats.done++
-    if (stats.done % 25 === 0) console.log(`  …${stats.done} watermarked`)
-  } catch (err) {
-    stats.failed++
-    console.error(`  FAILED ${rel}: ${err.message}`)
-  }
-}
+for (const f of stats.failures) console.error(`  FAILED ${f}`)
 
 console.log(`
-${DRY ? 'DRY RUN — nothing written' : 'Done'}
+${dryRun ? 'DRY RUN — nothing written' : 'Done'}
   uploads dir : ${UPLOADS_DIR}
   scanned     : ${stats.seen}
   watermarked : ${stats.done}
-  skipped     : ${stats.skipped}  (already backed up, or too small to mark)
+  skipped     : ${stats.skipped}  (already archived, or too small to mark)
   failed      : ${stats.failed}
 ${stats.alreadyMarked ? `
   ${stats.alreadyMarked} photo(s) were marked at upload before originals were archived,
@@ -127,4 +40,4 @@ ${stats.alreadyMarked ? `
 ${stats.alreadyMarkedFiles.map((f) => `    ${f}`).join('\n')}
 ` : ''}
   size        : ${(stats.bytesBefore / 1e6).toFixed(1)} MB -> ${(stats.bytesAfter / 1e6).toFixed(1)} MB
-${stats.done && !DRY ? `\n  originals kept in ${ORIGINALS}\n  to undo: cp -r ${ORIGINALS}/. ${ROOMS}/` : ''}`)
+${stats.done && !dryRun ? `\n  originals kept in ${paths.originals}\n  to undo: cp -r ${paths.originals}/. ${paths.rooms}/` : ''}`)
