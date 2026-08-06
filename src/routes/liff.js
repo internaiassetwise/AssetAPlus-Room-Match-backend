@@ -35,6 +35,48 @@ import { notifyAdminGroup } from '../linebot/adminAlert.service.js'
 
 export const liff = Router()
 
+// The relationship options, in the landlord's own words. Same list the admin
+// room form offers, and the value IS the label — one representation in
+// landlords.contact_relation no matter which form wrote it.
+//
+// Rendered into the form AND referenced by the handler below, so the two cannot
+// drift: they used to, and the handler validated Thai answers against English
+// codes ('child', 'spouse', …) that nothing ever sent. Every relationship a
+// landlord picked was silently discarded, with the form reporting success.
+const CONTACT_RELATIONS = ['บิดา/มารดา', 'คู่สมรส', 'บุตร', 'พี่/น้องร่วมสายเลือด', 'อื่นๆ']
+const OTHER_RELATION = 'อื่นๆ'
+// Long enough for a typed-in relationship, short enough that the column can't be
+// used as free storage.
+const RELATION_MAX = 60
+
+/**
+ * Work out what to store for "ความสัมพันธ์กับเจ้าของห้อง".
+ *
+ * NOT a whitelist, and it cannot be: picking "อื่นๆ" makes the form replace the
+ * field with whatever the landlord typed, so the legitimate value space is open.
+ * It was whitelisted once — against English codes ('child', 'spouse', …) that no
+ * form has ever sent — so every answer, including the five fixed options, was
+ * silently discarded while the form reported success.
+ *
+ * Exported so this rule can be tested directly; it is the part that was wrong.
+ *
+ * @param {object} body  the submitted form fields
+ * @returns {string|null}
+ */
+export function resolveContactRelation(body = {}) {
+  const picked = String(body.contactPersonRelation || '').trim().slice(0, RELATION_MAX)
+  if (!picked) return null
+  // The form normally folds the "ระบุ" text in before sending. If it arrives
+  // unfolded — a cached page, a client whose JS didn't run — the detail is in its
+  // own field, and storing a bare "อื่นๆ" would throw away the only part an admin
+  // actually needs.
+  if (picked === OTHER_RELATION) {
+    const typed = String(body.contactPersonRelationOther || '').trim().slice(0, RELATION_MAX)
+    if (typed) return typed
+  }
+  return picked
+}
+
 // multer in-memory so the handler can persist each photo itself. Mirrors
 // my-listings.js: 10 MB cap per image, images only.
 const photoUpload = multer({
@@ -140,11 +182,7 @@ function renderListingHtml(liffId, submitUrl) {
         <label for="contactPersonRelation">ความสัมพันธ์กับเจ้าของห้อง</label>
         <select id="contactPersonRelation" name="contactPersonRelation">
           <option value="">— เลือก —</option>
-          <option value="บิดา/มารดา">บิดา/มารดา</option>
-          <option value="คู่สมรส">คู่สมรส</option>
-          <option value="บุตร">บุตร</option>
-          <option value="พี่/น้องร่วมสายเลือด">พี่/น้องร่วมสายเลือด</option>
-          <option value="อื่นๆ">อื่นๆ (ระบุ)</option>
+          ${CONTACT_RELATIONS.map((r) => `<option value="${r}">${r === OTHER_RELATION ? `${r} (ระบุ)` : r}</option>`).join('\n          ')}
         </select>
         <input id="contactPersonRelationOther" name="contactPersonRelationOther" type="text"
                placeholder="ระบุความสัมพันธ์" style="display:none; margin-top:8px;" />
@@ -582,13 +620,11 @@ liff.post('/listing/submit',
   const contactName  = String(req.body.contactName || '').trim()
   const contactPhone = String(req.body.contactPhone || '').trim()
   // Whoever should actually be called, when that is not the owner. Relation is
-  // validated against the same list the admin form offers; anything else is
-  // dropped rather than trusted, since this arrives from a public form.
-  const RELATIONS = ['child', 'spouse', 'relative', 'agent', 'other']
+  // free text by design — see resolveContactRelation. Safe stored as such: only
+  // admins read it back, and React escapes it.
   const cpName     = String(req.body.contactPersonName  || '').trim().slice(0, 160)
   const cpPhone    = String(req.body.contactPersonPhone || '').trim().slice(0, 40)
-  const cpRelation = RELATIONS.includes(String(req.body.contactPersonRelation || '').trim())
-    ? String(req.body.contactPersonRelation).trim() : null
+  const cpRelation = resolveContactRelation(req.body)
   if (contactName || contactPhone || cpName || cpPhone) {
     await landlords.update(landlord.id, {
       ...(contactName  ? { fullName: contactName }  : {}),
