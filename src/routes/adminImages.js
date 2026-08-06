@@ -46,6 +46,7 @@ function publicJob() {
       failed:             stats.failed,
       alreadyMarked:      stats.alreadyMarked,
       reclaimed:          stats.reclaimed,
+      urlsBumped:         stats.urlsBumped,
       alreadyMarkedFiles: stats.alreadyMarkedFiles.slice(0, 50),
       failures:           stats.failures.slice(0, 20),
     },
@@ -72,7 +73,7 @@ adminImages.post('/watermark', requireAdmin, validate({ body: startBody }),
       finishedAt: null,
       startedBy: req.admin?.displayName || req.admin?.username || null,
       error: null,
-      stats: { seen: 0, done: 0, skipped: 0, failed: 0, bytesBefore: 0, bytesAfter: 0, alreadyMarked: 0, alreadyMarkedFiles: [], failures: [], reclaimed: 0 },
+      stats: { seen: 0, done: 0, skipped: 0, failed: 0, bytesBefore: 0, bytesAfter: 0, alreadyMarked: 0, alreadyMarkedFiles: [], failures: [], reclaimed: 0, urlsBumped: 0 },
     }
 
     // Deliberately not awaited — the response returns now and the client polls.

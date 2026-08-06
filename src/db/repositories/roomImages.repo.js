@@ -26,6 +26,34 @@ export async function create(roomId, url, fileName, opts = {}) {
 }
 
 /**
+ * Stamp a fresh cache-busting token onto a photo's URL.
+ *
+ * /uploads is served with max-age=7d, so when the watermark job rewrites a file
+ * in place the path is unchanged and every browser and LINE client keeps serving
+ * the copy it already has — for up to a week. The bytes changed but the name did
+ * not, and a cache has no way to know.
+ *
+ * Bumping ?v= makes it a different URL, so caches miss and refetch immediately.
+ * Any existing ?v= is replaced rather than appended, or repeated runs would
+ * grow the query string forever.
+ *
+ * @param {string|number} roomId
+ * @param {string} fileName  the stored file name (unique per upload)
+ * @param {string|number} token
+ */
+export async function bumpCacheToken(roomId, fileName, token) {
+  if (!roomId || !fileName) return 0
+  const { rowCount } = await query(
+    `UPDATE room_images
+        SET url = split_part(url, '?', 1) || '?v=' || $3
+      WHERE room_id = $1
+        AND split_part(split_part(url, '?', 1), '/', -1) = $2`,
+    [roomId, fileName, String(token)],
+  )
+  return rowCount
+}
+
+/**
  * Rewrite the gallery order for one room.
  *
  * `ids` is the full desired order, first = cover. Ids that don't belong to the

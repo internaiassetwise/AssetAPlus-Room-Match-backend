@@ -18,6 +18,7 @@ import path from 'node:path'
 import sharp from 'sharp'
 import { UPLOADS_DIR } from '../config.js'
 import { applyWatermark } from './watermark.service.js'
+import * as roomImages from '../db/repositories/roomImages.repo.js'
 
 const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif'])
 
@@ -98,6 +99,26 @@ export const paths = {
 }
 
 /**
+ * Point every cache at the new bytes.
+ *
+ * Rewriting a photo in place leaves its URL identical, and /uploads is served
+ * with max-age=7d — so browsers and LINE keep showing the pre-watermark image
+ * for up to a week, with no way to know it is stale. Stamping a new ?v= makes it
+ * a different URL, so the next request actually fetches.
+ *
+ * Best-effort: the file on disk is already correct, and failing the whole job
+ * over a cache hint would be worse than a slow refresh.
+ */
+async function bustCache(rel, token, stats) {
+  const [roomId, fileName] = [rel.split(path.sep)[0], path.basename(rel)]
+  try {
+    if (await roomImages.bumpCacheToken(roomId, fileName, token)) stats.urlsBumped++
+  } catch {
+    /* cosmetic — the photo is correct either way */
+  }
+}
+
+/**
  * @param {object}   [opts]
  * @param {boolean}  [opts.dryRun]  Report only, write nothing.
  * @param {boolean}  [opts.force]   Redo finished photos (after a style change).
@@ -111,11 +132,14 @@ export const paths = {
  * @param {Function} [opts.onProgress] Called with the running stats object.
  * @returns {Promise<object>} stats
  */
+
 export async function runBackfill({ dryRun = false, force = false, reclaim = false, onProgress } = {}) {
+  // One token per run: same cache generation for everything this job touches.
+  const token = Date.now()
   const stats = {
     seen: 0, done: 0, skipped: 0, failed: 0,
     bytesBefore: 0, bytesAfter: 0,
-    alreadyMarked: 0, alreadyMarkedFiles: [], failures: [], reclaimed: 0,
+    alreadyMarked: 0, alreadyMarkedFiles: [], failures: [], reclaimed: 0, urlsBumped: 0,
   }
 
   for await (const file of walk(paths.rooms)) {
@@ -152,6 +176,7 @@ export async function runBackfill({ dryRun = false, force = false, reclaim = fal
           await fs.mkdir(path.dirname(backup), { recursive: true })
           await fs.writeFile(backup, cropped)
           await fs.writeFile(file, await applyWatermark(cropped))
+          await bustCache(rel, token, stats)
         }
         stats.reclaimed++
         stats.done++
@@ -184,6 +209,7 @@ export async function runBackfill({ dryRun = false, force = false, reclaim = fal
           await fs.writeFile(backup, before)   // archive first — never the other way round
         }
         await fs.writeFile(file, after)
+        await bustCache(rel, token, stats)
       }
       stats.done++
     } catch (err) {

@@ -37,6 +37,7 @@ ${dryRun ? 'DRY RUN — nothing written' : 'Done'}
   watermarked : ${stats.done}
   skipped     : ${stats.skipped}  (already archived, or too small to mark)
   failed      : ${stats.failed}
+  urls bumped : ${stats.urlsBumped}  (cache-busting ?v= so browsers refetch)
 ${stats.alreadyMarked ? `
   ${stats.alreadyMarked} photo(s) were marked at upload before originals were archived,
   so there is no clean copy to restyle from. Left untouched rather than
