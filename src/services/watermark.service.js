@@ -25,7 +25,10 @@ const MARK_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 
 
 const ANGLE       = -30    // degrees; diagonal reads as a watermark, not as a caption
 const WIDTH_RATIO = 0.16   // one mark spans ~16% of the photo width
-const OPACITY     = 0.22   // visible in a screenshot, still see-through
+// Visible in a screenshot, still see-through. Raised from 0.22, which held up at
+// full size but faded to nothing once a photo was scaled down to a card or a
+// LINE thumbnail — where most people actually see these.
+const OPACITY     = 0.32
 // Tile pitch, in multiples of the rotated mark. Must stay >= 2: the staggered
 // copy sits at half the tile, so anything tighter pushes it past the canvas edge
 // and sharp throws. Denser coverage comes from a smaller WIDTH_RATIO instead.
