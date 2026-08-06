@@ -67,6 +67,9 @@ const writeBody = z.object({
   amenities:     z.array(z.string().trim().min(1)).max(50).optional(),
   isFeatured:    z.boolean().optional(),
   isNewArrival:  z.boolean().optional(),
+  // Internal staff note. Admin-only on the way out (publicRoom strips it) and
+  // admin-only on the way in — every route using this schema is requireAdmin.
+  remark:        z.string().max(2000).optional().nullable(),
 })
 
 const idParam = z.object({ id: z.coerce.number().int().positive() })
@@ -109,10 +112,11 @@ rooms.get('/:id', validate({ params: idParam }), asyncHandler(async (req, res) =
  */
 function publicRoom(room, isAdmin = false) {
   if (!room) return room
-  const { createdByLineUserId, approvedBy, landlordId, ...rest } = room
+  const { createdByLineUserId, approvedBy, landlordId, remark, ...rest } = room
   // landlordId is an internal FK. Anonymous readers don't get it; the admin
   // room form does, because it needs to preselect the owner.
-  return isAdmin ? { ...rest, landlordId } : rest
+  // remark is a staff note written for staff — same treatment.
+  return isAdmin ? { ...rest, landlordId, remark } : rest
 }
 
 /**

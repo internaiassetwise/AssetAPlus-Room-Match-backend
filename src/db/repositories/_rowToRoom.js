@@ -20,6 +20,8 @@ export function rowToRoom(row) {
     building: row.building ?? null,
     floor: row.floor == null ? null : Number(row.floor),
     viewType: row.view_type ?? null,
+    // Internal staff note — publicRoom() strips this. See migration 023.
+    remark: row.remark ?? null,
     beds: row.bedrooms,
     baths: row.bathrooms,
     sqm: row.size_sqm == null ? null : Number(row.size_sqm),

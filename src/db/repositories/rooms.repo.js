@@ -11,7 +11,7 @@ const SELECT_ROOM = `
     r.amenities, r.is_featured, r.view_count,
     r.created_at, r.updated_at,
     r.created_by_line_user_id, r.approved_at, r.approved_by,
-    r.project_name, r.room_code, r.building, r.floor, r.view_type, r.room_type,
+    r.project_name, r.room_code, r.building, r.floor, r.view_type, r.room_type, r.remark,
     z.slug AS zone_slug, z.name_th AS zone_name_th,
     (SELECT url FROM room_images WHERE room_id = r.id ORDER BY sort_order LIMIT 1) AS image_url
   FROM rooms r
@@ -129,22 +129,22 @@ export async function create(input) {
     amenities = [], isFeatured = false, isNewArrival = false,
     lat = null, lng = null, address = null,
     projectName = null, roomCode = null, building = null,
-    floor = null, viewType = null, roomType = null,
+    floor = null, viewType = null, roomType = null, remark = null,
   } = input
   const { rows } = await query(
     `INSERT INTO rooms (landlord_id, zone_id, title, description, property_type,
                         bedrooms, bathrooms, size_sqm, monthly_rent, status,
                         available_from, amenities, is_featured, is_new_arrival,
                         lat, lng, address,
-                        project_name, room_code, building, floor, view_type, room_type)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+                        project_name, room_code, building, floor, view_type, room_type, remark)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
      RETURNING id`,
     [
       landlordId, zoneId, title, description, propertyType,
       bedrooms, bathrooms, sizeSqm ?? 0, monthlyRent, status,
       availableFrom, JSON.stringify(amenities), isFeatured, isNewArrival,
       lat ?? null, lng ?? null, address ?? null,
-      projectName, roomCode, building, floor, viewType, roomType,
+      projectName, roomCode, building, floor, viewType, roomType, remark,
     ],
   )
   return findById(rows[0].id)
@@ -178,6 +178,7 @@ export async function update(id, fields) {
     floor:         'floor',
     viewType:      'view_type',
     roomType:      'room_type',
+    remark:        'remark',
   }
   for (const [k, v] of Object.entries(fields)) {
     if (v === undefined) continue
@@ -273,6 +274,8 @@ export async function createPending({
                         bedrooms, bathrooms, size_sqm, monthly_rent, status,
                         available_from, amenities, is_featured, is_new_arrival, lat, lng, address,
                         created_by_line_user_id,
+                        -- no remark column: that is a staff note, and this is
+                        -- the landlord's own submission from the LIFF form.
                         project_name, room_code, building, floor, view_type, room_type)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11::jsonb,false,false,$12,$13,$14,$15,
              $16,$17,$18,$19,$20,$21)
