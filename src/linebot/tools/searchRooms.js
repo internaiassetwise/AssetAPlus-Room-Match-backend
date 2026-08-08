@@ -141,6 +141,6 @@ export async function handler(args, ctx) {
     zoneMatched: location ? Boolean(zone) : null,
     // Push a Flex carousel of the (full) room objects so the tenant sees cards.
     // The agent loop strips _push before forwarding the result to Gemini.
-    _push: rooms.length ? [roomCarousel(rooms)] : [],
+    _push: rooms.length ? [roomCarousel(rooms, ctx?.lang)] : [],
   }
 }

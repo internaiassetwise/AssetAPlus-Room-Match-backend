@@ -42,6 +42,7 @@ import { alertAdmins } from './adminAlert.service.js'
 import { menuQuickReply, zoneQuickReply } from './flexMessages.js'
 import * as zonesRepo from '../db/repositories/zones.repo.js'
 import * as roomInterest from '../db/repositories/roomInterest.repo.js'
+import { conversationLang } from './lang.js'
 
 const MAX_TOOL_ROUNDS = 5
 // How long a tapped room stays the implied subject of the conversation.
@@ -297,7 +298,10 @@ async function runAgentLoop({ lineUserId, history }) {
   const lastUserText = history.length ? history[history.length - 1].content : ''
   // lastUserText is passed to tools so escalations can record the user's actual
   // message even when the model omits it from the tool args (escalateToAdmin).
-  const ctx = { lineUserId, logger, lastUserText }
+  // Flex cards are built in code, not by the model, so they need to be told
+  // the language the rest of the reply will be in.
+  const lang = conversationLang(history, lastUserText)
+  const ctx = { lineUserId, logger, lastUserText, lang }
   let contents = buildContents(history, await roomContextLine(lineUserId))
   const pushes = []
   let retriedEmpty = false

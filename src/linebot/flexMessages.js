@@ -53,9 +53,9 @@ function resolveHeroUrl(image) {
   return /^https:\/\//i.test(abs) ? abs : null
 }
 
-function rentText(n) {
+function rentText(n, lang = 'th') {
   const v = Number(n ?? 0)
-  return `฿${v.toLocaleString('en-US')}/เดือน`
+  return `฿${v.toLocaleString('en-US')}${cardCopy(lang).rentSuffix}`
 }
 
 /**
@@ -92,19 +92,56 @@ export function zoneQuickReply(zones = []) {
   return { items }
 }
 
+
+// Card copy in both languages. The model never sees these — Flex is built here
+// and pushed straight to LINE — so without this an English speaker gets a fluent
+// English reply followed by a Thai room card.
+const CARD = {
+  th: {
+    room: 'ห้อง', rentSuffix: '/เดือน', zonePrefix: 'ย่าน',
+    beds: 'ห้องนอน', baths: 'ห้องน้ำ', sqm: 'ตร.ม.',
+    fallbackTitle: 'ห้องเช่า',
+    book: 'อยากนัดชม', details: 'ดูรายละเอียด',
+    bookText: (c) => (c ? `อยากนัดชมห้อง ${c}` : 'อยากนัดชมห้องนี้'),
+    detailText: (c) => (c ? `ขอดูรายละเอียดห้อง ${c}` : 'ขอดูรายละเอียดห้องนี้'),
+    altOne: (t) => `ห้องเช่า: ${t}`,
+    altMany: (n) => `มีห้องให้เลือก ${n} ห้อง — เปิดดูในแชท`,
+  },
+  en: {
+    room: 'Unit', rentSuffix: '/month', zonePrefix: '',
+    beds: 'bed', baths: 'bath', sqm: 'sqm',
+    fallbackTitle: 'Room for rent',
+    book: 'Book a viewing', details: 'View details',
+    // The reply text is what the USER appears to send, and the bot parses it.
+    // Kept in the user's own language so the transcript reads naturally; the
+    // agent handles both languages.
+    bookText: (c) => (c ? `I'd like to view unit ${c}` : "I'd like to view this room"),
+    detailText: (c) => (c ? `Tell me more about unit ${c}` : 'Tell me more about this room'),
+    altOne: (t) => `Room for rent: ${t}`,
+    altMany: (n) => `${n} rooms to choose from — open in chat`,
+  },
+}
+const cardCopy = (lang) => CARD[lang] || CARD.th
+
+const PROPERTY_LABEL_EN = {
+  condo: 'Condo', house: 'House', townhouse: 'Townhouse',
+  apartment: 'Apartment', studio: 'Studio',
+}
+
 /** A single room as a Flex bubble (hero image + specs + อยากนัดชม/ดูรายละเอียด buttons). */
-export function roomCard(room = {}) {
+export function roomCard(room = {}, lang = 'th') {
+  const t = cardCopy(lang)
   const specs = [
-    room.beds != null ? `${room.beds} ห้องนอน` : '',
-    room.baths != null ? `${room.baths} ห้องน้ำ` : '',
-    room.sqm != null ? `${room.sqm} ตร.ม.` : '',
-    room.propertyType ? PROPERTY_LABEL[room.propertyType] || room.propertyType : '',
+    room.beds != null ? `${room.beds} ${t.beds}` : '',
+    room.baths != null ? `${room.baths} ${t.baths}` : '',
+    room.sqm != null ? `${room.sqm} ${t.sqm}` : '',
+    room.propertyType ? (lang === 'en' ? PROPERTY_LABEL_EN[room.propertyType] : PROPERTY_LABEL[room.propertyType]) || room.propertyType : '',
   ].filter(Boolean).join(' · ')
 
   const shownCode = maskRoomCode(room.roomCode)
   // Admins often put the unit number in the title ("Kave Pop Salaya - A0707"),
   // which would hand back the very code the line below it is hiding.
-  const shownTitle = maskCodeInText(room.title, room.roomCode) || 'ห้องเช่า'
+  const shownTitle = maskCodeInText(room.title, room.roomCode) || t.fallbackTitle
 
   const body = {
     type: 'box', layout: 'vertical', spacing: 'sm', contents: [
@@ -112,17 +149,17 @@ export function roomCard(room = {}) {
       // Identify the room by its room number so users (and the bot) refer to a
       // room by "ห้อง A012xx" rather than an internal id. Masked — the tail of a
       // room number points at a real unit and the customer doesn't need it.
-      ...(shownCode ? [{ type: 'text', text: `ห้อง ${shownCode}`, size: 'sm', color: '#6B7280', wrap: true }] : []),
-      { type: 'text', text: rentText(room.price), weight: 'bold', size: 'md', color: '#0A7C3B' },
+      ...(shownCode ? [{ type: 'text', text: `${t.room} ${shownCode}`, size: 'sm', color: '#6B7280', wrap: true }] : []),
+      { type: 'text', text: rentText(room.price, lang), weight: 'bold', size: 'md', color: '#0A7C3B' },
       ...(specs ? [{ type: 'text', text: specs, size: 'sm', color: '#6B7280', wrap: true }] : []),
-      ...(room.zone ? [{ type: 'text', text: `ย่าน${room.zone}`, size: 'sm', color: '#6B7280' }] : []),
+      ...(room.zone ? [{ type: 'text', text: `${t.zonePrefix}${lang === 'en' ? (room.zoneEn || room.zone) : room.zone}`, size: 'sm', color: '#6B7280' }] : []),
     ],
   }
   // Human-facing labels use the MASKED room number; the internal id travels
   // invisibly in the postback `data` so tool lookups stay reliable even though
   // the user never sees the id. Fall back to "ห้องนี้" when a room has no code.
-  const viewingText = shownCode ? `อยากนัดชมห้อง ${shownCode}` : 'อยากนัดชมห้องนี้'
-  const detailText  = shownCode ? `ขอดูรายละเอียดห้อง ${shownCode}` : 'ขอดูรายละเอียดห้องนี้'
+  const viewingText = t.bookText(shownCode)
+  const detailText  = t.detailText(shownCode)
 
   // ดูรายละเอียด opens the room's page on the website when a web origin is
   // configured (WEB_BASE_URL, falling back to APP_BASE_URL). With no origin it
@@ -130,13 +167,13 @@ export function roomCard(room = {}) {
   // shows the room number (displayText) while carrying the id (data).
   const webOrigin = config.WEB_BASE_URL || config.APP_BASE_URL
   const detailAction = webOrigin && /^https?:\/\//i.test(webOrigin)
-    ? { type: 'uri', label: 'ดูรายละเอียด', uri: `${webOrigin.replace(/\/+$/, '')}/rooms/${room.id}` }
-    : { type: 'postback', label: 'ดูรายละเอียด', data: `action=details&roomId=${room.id}`, displayText: detailText }
+    ? { type: 'uri', label: t.details, uri: `${webOrigin.replace(/\/+$/, '')}/rooms/${room.id}` }
+    : { type: 'postback', label: t.details, data: `action=details&roomId=${room.id}`, displayText: detailText }
 
   const footer = {
     type: 'box', layout: 'vertical', spacing: 'sm', contents: [
       { type: 'button', style: 'primary', color: '#1F4068',
-        action: { type: 'postback', label: 'อยากนัดชม', data: `action=viewing&roomId=${room.id}`, displayText: viewingText } },
+        action: { type: 'postback', label: t.book, data: `action=viewing&roomId=${room.id}`, displayText: viewingText } },
       { type: 'button', style: 'secondary', action: detailAction },
     ],
   }
@@ -152,16 +189,17 @@ export function roomCard(room = {}) {
  * Rooms as a Flex message: a single bubble for one room, or a carousel for many
  * (Line caps carousels at 12 bubbles; we cap at 5).
  */
-export function roomCarousel(rooms = []) {
+export function roomCarousel(rooms = [], lang = 'th') {
+  const t = cardCopy(lang)
   const list = (Array.isArray(rooms) ? rooms : []).slice(0, 5)
   if (list.length === 0) return null
   if (list.length === 1) {
-    return { type: 'flex', altText: `ห้องเช่า: ${list[0].title || ''}`, contents: roomCard(list[0]) }
+    return { type: 'flex', altText: t.altOne(list[0].title || ''), contents: roomCard(list[0], lang) }
   }
   return {
     type: 'flex',
-    altText: `มีห้องให้เลือก ${list.length} ห้อง — เปิดดูในแชท`,
-    contents: { type: 'carousel', contents: list.map(roomCard) },
+    altText: t.altMany(list.length),
+    contents: { type: 'carousel', contents: list.map((r) => roomCard(r, lang)) },
   }
 }
 

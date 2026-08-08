@@ -609,12 +609,17 @@ liff.post('/ask/record',
     try {
       const room = await roomsRepo.findById(roomId)
       if (room) {
-        const card = roomCarousel([room])
+        // The web app knows which language the visitor is reading in and passes
+        // it through the tap, so the card that greets them matches the site they
+        // just came from rather than defaulting to Thai.
+        const lang = String(req.body?.lang || req.query?.lang || '').toLowerCase() === 'en' ? 'en' : 'th'
+        const card = roomCarousel([room], lang)
+        const greeting = lang === 'en'
+          ? 'Interested in this room? 😊 Ask away — price, viewings or any details, and I can help.'
+          : 'สนใจห้องนี้ใช่ไหมคะ 😊 ถามได้เลยค่ะ เรื่องราคา นัดชม หรือรายละเอียดห้อง น้องห้องตอบให้ได้เลยนะคะ'
         await lineMessaging.pushMessage(lineUserId, [
           ...(card ? [card] : []),
-          { type: 'text',
-            text: 'สนใจห้องนี้ใช่ไหมคะ 😊 ถามได้เลยค่ะ เรื่องราคา นัดชม หรือรายละเอียดห้อง น้องห้องตอบให้ได้เลยนะคะ',
-            quickReply: menuQuickReply() },
+          { type: 'text', text: greeting, quickReply: menuQuickReply() },
         ])
         logger.info({ lineUserId, roomId }, 'pushed room card to open the conversation')
       }
