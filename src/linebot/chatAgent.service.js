@@ -165,12 +165,31 @@ export async function runOnce(lineUserId, text) {
 function wantsRoomSearch(text) {
   const t = String(text || '').toLowerCase().trim()
   if (!t) return false
+
   // Belongs to another tool/flow → don't force searchRooms.
-  if (/นัดชม|เข้าชม|จอง|ลงประกาศ|ปล่อยห้อง|ลงห้อง|แก้รายละเอียด|แก้ห้อง|อัปโหลดรูป|ส่งรูป|list.{0,12}room|post.{0,12}room|edit/.test(t)) return false
+  //
+  // The English half requires a possessive or article between the verb and the
+  // noun ("list MY room", "post A room"). It used to be `list.{0,12}room`, which
+  // also matched "show me the LIST OF ROOMs" — a browse — and suppressed the
+  // search for it.
+  if (/นัดชม|เข้าชม|จอง|ลงประกาศ|ปล่อยห้อง|ลงห้อง|แก้รายละเอียด|แก้ห้อง|อัปโหลดรูป|ส่งรูป|edit/.test(t)) return false
+  if (/\b(list|post|advertise|rent out)\s+(my|our|a|an)\s+(\w+\s+)?(room|unit|condo|property)/.test(t)) return false
+
   // A specific room reference → getRoomDetails, not a browse.
   if (/ดูห้อง\s*#?\s*\d|ห้อง\s*#?\s*\d|room\s*#?\s*\d/.test(t)) return false
+
   // Obvious room-browsing intent (Thai + English), incl. filtered ("ห้องอ่อนนุก").
-  return /ดูห้อง|ห้องว่าง|หาห้อง|มีห้อง|เช่าห้อง|ห้องเช่า|แนะนำห้อง|เลือกห้อง|ห้องใกล้|ห้องย่าน|ห้อง.+ย่าน|show.{0,20}room|available.{0,20}room|find.{0,20}room|search.{0,20}room|browse.{0,20}room/.test(t)
+  if (/ดูห้อง|ห้องว่าง|หาห้อง|มีห้อง|เช่าห้อง|ห้องเช่า|แนะนำห้อง|เลือกห้อง|ห้องใกล้|ห้องย่าน|ห้อง.+ย่าน/.test(t)) return true
+
+  // English. Kept as a verb list plus two noun-phrase shapes rather than one
+  // big alternation, because the miss that prompted this — "I want to SEE all
+  // the ROOM LIST" — was a verb nobody had listed and a word order nobody had
+  // considered.
+  if (/\b(see|show|view|find|search|browse|check|get|want|have|got|any|all|which|what)\b[^.?!]{0,30}\brooms?\b/.test(t)) return true
+  if (/\brooms?\b[^.?!]{0,16}\b(list|available|free|vacant)\b/.test(t)) return true
+  if (/\blist of\s+(\w+\s+)?rooms?\b/.test(t)) return true
+
+  return false
 }
 
 /**
@@ -178,6 +197,25 @@ function wantsRoomSearch(text) {
  * text). Order matters: remove ** before *, etc. Conservative — room copy
  * rarely contains literal *, _, #, or backticks.
  */
+/**
+ * Does this reply promise room cards the user is about to see?
+ *
+ * The model sometimes answers "here are some rooms below" without calling
+ * searchRooms, so the promise arrives with nothing attached — the user is told
+ * to look at a list that was never sent. Widening the intent regex only fixes
+ * the phrasings someone thought of; this catches the class.
+ *
+ * Tight on purpose: it needs BOTH a room word and a "look below" deictic, so an
+ * ordinary sentence mentioning a room doesn't trigger a carousel.
+ */
+function promisesRoomCards(text) {
+  const t = String(text || '').toLowerCase()
+  if (!t) return false
+  const room = /ห้อง|rooms?\b/.test(t)
+  const below = /ด้านล่าง|ตามนี้|ดังนี้|below|following|here are|check the details|take a look/.test(t)
+  return room && below
+}
+
 function stripMarkdown(text) {
   if (typeof text !== 'string') return text
   return text
@@ -366,7 +404,22 @@ async function runAgentLoop({ lineUserId, history }) {
     const fcs = Array.isArray(turn.functionCalls) ? turn.functionCalls : []
     if (fcs.length === 0) {
       const text = turn.text && turn.text.trim() ? turn.text.trim() : null
-      if (text) { emitTimings(); return { reply: text, pushes } }
+      if (text) {
+        // The model promised cards without fetching any. Fetch them now rather
+        // than send a reply pointing at nothing.
+        if (!pushes.length && promisesRoomCards(text)) {
+          try {
+            const rescue = await tools.dispatch('searchRooms', {}, ctx)
+            if (rescue && Array.isArray(rescue._push) && rescue._push.length) {
+              pushes.push(...rescue._push)
+              logger.info({ lineUserId }, 'reply promised rooms with no tool call — attached cards')
+            }
+          } catch (err) {
+            logger.warn({ err: err.message, lineUserId }, 'card rescue failed')
+          }
+        }
+        emitTimings(); return { reply: text, pushes }
+      }
       // Empty turn — a thinking model occasionally emits no visible text or
       // functionCall (e.g. when truncated by the output-token cap). Give it one
       // more shot before giving up, so the user rarely sees "ระบบตอบกลับไม่ได้".
