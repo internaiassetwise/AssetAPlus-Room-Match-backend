@@ -32,6 +32,7 @@ import { ZONE_PROJECTS, ZONE_NAMES, ROOM_TYPES } from '../data/projects.js'
 import * as rooms       from '../db/repositories/rooms.repo.js'
 import * as roomImages  from '../db/repositories/roomImages.repo.js'
 import { notifyAdminGroup } from '../linebot/adminAlert.service.js'
+import { FORM_COPY } from './liffFormCopy.js'
 
 export const liff = Router()
 
@@ -153,115 +154,128 @@ function renderListingHtml(liffId, submitUrl) {
     .status { display: none; margin-top: 14px; padding: 12px; border-radius: 10px; font-size: 14px; }
     .status.success { background: #ECFDF5; color: #065F46; display: block; }
     .status.error { background: #FEF2F2; color: #991B1B; display: block; }
+    /* Sits above the heading: a landlord who can't read the form needs to find
+       this before anything else on the page. */
+    .langbar { display: flex; justify-content: flex-end; gap: 4px; margin: 0 0 4px; }
+    .langbtn {
+      min-height: 32px; padding: 0 12px; font-size: 13px; font-weight: 600;
+      border: 1px solid #D1D5DB; background: #fff; color: #1F4068;
+      border-radius: 999px; cursor: pointer;
+    }
+    .langbtn[aria-pressed="true"] { background: #1F4068; color: #fff; border-color: #1F4068; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>ลงประกาศห้องของคุณ</h1>
-    <p class="sub">กรอกข้อมูลแล้วกดส่ง แอดมินจะตรวจสอบและอนุมัติให้ค่ะ</p>
+    <div class="langbar">
+      <button type="button" class="langbtn" data-lang="th">ไทย</button>
+      <button type="button" class="langbtn" data-lang="en">EN</button>
+    </div>
+    <h1 data-i18n="title">ลงประกาศห้องของคุณ</h1>
+    <p class="sub" data-i18n="sub">กรอกข้อมูลแล้วกดส่ง แอดมินจะตรวจสอบและอนุมัติให้ค่ะ</p>
     <form id="listingForm" class="card">
       <input type="hidden" id="lineUserId" name="lineUserId" value="" />
 
-      <label for="contactName">ชื่อเจ้าของห้อง <span class="opt">*</span></label>
-      <input id="contactName" name="contactName" type="text" required placeholder="เช่น คุณสมชัย" />
+      <label for="contactName"><span data-i18n="contactName">ชื่อเจ้าของห้อง</span> <span class="opt">*</span></label>
+      <input id="contactName" name="contactName" type="text" required placeholder="เช่น คุณสมชัย" data-i18n-ph="phContactName" />
 
-      <label for="contactPhone">เบอร์โทร <span class="opt">*</span></label>
-      <input id="contactPhone" name="contactPhone" type="tel" required placeholder="เช่น 081-234-5678" />
+      <label for="contactPhone"><span data-i18n="contactPhone">เบอร์โทร</span> <span class="opt">*</span></label>
+      <input id="contactPhone" name="contactPhone" type="tel" required placeholder="เช่น 081-234-5678" data-i18n-ph="phContactPhone" />
 
       <!-- Contact person. Collapsed by default: most owners are their own
            contact, and three extra fields on a phone form is where people give
            up. <details> keeps it one tap away without any JS. -->
       <details class="contact-person">
-        <summary>ลงทะเบียนแทนคนอื่น? (เช่น ลงให้พ่อแม่)</summary>
-        <label for="contactPersonName">ชื่อผู้ติดต่อ</label>
-        <input id="contactPersonName" name="contactPersonName" type="text" placeholder="ชื่อคนที่ให้ติดต่อกลับ" />
+        <summary data-i18n="contactPersonSummary">ลงทะเบียนแทนคนอื่น? (เช่น ลงให้พ่อแม่)</summary>
+        <label for="contactPersonName"><span data-i18n="contactPersonName">ชื่อผู้ติดต่อ</span> </label>
+        <input id="contactPersonName" name="contactPersonName" type="text" placeholder="ชื่อคนที่ให้ติดต่อกลับ" data-i18n-ph="phContactPersonName" />
 
-        <label for="contactPersonPhone">เบอร์ผู้ติดต่อ</label>
-        <input id="contactPersonPhone" name="contactPersonPhone" type="tel" placeholder="เบอร์ที่โทรติดจริง" />
+        <label for="contactPersonPhone"><span data-i18n="contactPersonPhone">เบอร์ผู้ติดต่อ</span> </label>
+        <input id="contactPersonPhone" name="contactPersonPhone" type="tel" placeholder="เบอร์ที่โทรติดจริง" data-i18n-ph="phContactPersonPhone" />
 
-        <label for="contactPersonRelation">ความสัมพันธ์กับเจ้าของห้อง</label>
+        <label for="contactPersonRelation"><span data-i18n="contactPersonRelation">ความสัมพันธ์กับเจ้าของห้อง</span> </label>
         <select id="contactPersonRelation" name="contactPersonRelation">
-          <option value="">— เลือก —</option>
-          ${CONTACT_RELATIONS.map((r) => `<option value="${r}">${r === OTHER_RELATION ? `${r} (ระบุ)` : r}</option>`).join('\n          ')}
+          <option value="" data-i18n="optSelect">— เลือก —</option>
+          ${CONTACT_RELATIONS.map((r) => `<option value="${r}" data-i18n="rel_${r}">${r}</option>`).join('\n          ')}
         </select>
         <input id="contactPersonRelationOther" name="contactPersonRelationOther" type="text"
-               placeholder="ระบุความสัมพันธ์" style="display:none; margin-top:8px;" />
+               placeholder="ระบุความสัมพันธ์" data-i18n-ph="phRelationOther" style="display:none; margin-top:8px;" />
       </details>
 
-      <label for="zone">โซน / ทำเล <span class="opt">*</span></label>
+      <label for="zone"><span data-i18n="zone">โซน / ทำเล</span> <span class="opt">*</span></label>
       <select id="zone" name="zone" required>
-        <option value="">— เลือกโซน / ทำเล —</option>
-        ${ZONE_NAMES.map((z) => `<option value="${z}">${z}</option>`).join('\n        ')}
-        <option value="อื่นๆ">อื่นๆ</option>
+        <option value="" data-i18n="optSelectZone">— เลือกโซน / ทำเล —</option>
+        ${ZONE_NAMES.map((z) => `<option value="${z}" data-i18n="zone_${z}">${z}</option>`).join('\n        ')}
+        <option value="อื่นๆ" data-i18n="optOther">อื่นๆ</option>
       </select>
-      <input id="zoneOther" type="text" placeholder="ระบุโซน / ทำเลของคุณ" style="display:none; margin-top:8px;" />
+      <input id="zoneOther" type="text" placeholder="ระบุโซน / ทำเลของคุณ" data-i18n-ph="phZoneOther" style="display:none; margin-top:8px;" />
 
-      <label for="projectName">ชื่อโครงการ <span class="opt">*</span></label>
+      <label for="projectName"><span data-i18n="projectName">ชื่อโครงการ</span> <span class="opt">*</span></label>
       <select id="projectName" name="projectName" required>
-        <option value="">— เลือกย่านก่อน —</option>
+        <option value="" data-i18n="optPickZoneFirst">— เลือกย่านก่อน —</option>
       </select>
       <input id="projectNameOther" name="projectNameOther" type="text"
-             placeholder="พิมพ์ชื่อโครงการ" style="display:none; margin-top:8px;" />
+             placeholder="พิมพ์ชื่อโครงการ" data-i18n-ph="phProjectOther" style="display:none; margin-top:8px;" />
 
-      <label for="roomCode">รหัสห้อง / เลขห้อง <span class="opt">*</span></label>
-      <input id="roomCode" name="roomCode" type="text" required placeholder="เช่น A0123" />
+      <label for="roomCode"><span data-i18n="roomCode">รหัสห้อง / เลขห้อง</span> <span class="opt">*</span></label>
+      <input id="roomCode" name="roomCode" type="text" required placeholder="เช่น A0123" data-i18n-ph="phRoomCode" />
 
       <input type="hidden" name="propertyType" value="condo" />
 
-      <label for="roomType">ประเภทห้อง</label>
+      <label for="roomType"><span data-i18n="roomType">ประเภทห้อง</span> </label>
       <select id="roomType" name="roomType">
-        <option value="">— เลือกประเภทห้อง —</option>
+        <option value="" data-i18n="optSelectRoomType">— เลือกประเภทห้อง —</option>
         ${ROOM_TYPES.map((t) => `<option value="${t}">${t}</option>`).join('\n        ')}
       </select>
 
       <div class="row">
         <div>
-          <label for="building">ตึก</label>
-          <input id="building" name="building" type="text" placeholder="เช่น A" />
+          <label for="building"><span data-i18n="building">ตึก</span> </label>
+          <input id="building" name="building" type="text" placeholder="เช่น A" data-i18n-ph="phBuilding" />
         </div>
         <div>
-          <label for="floor">ชั้น</label>
-          <input id="floor" name="floor" type="number" min="-10" max="200" placeholder="เช่น 12" />
+          <label for="floor"><span data-i18n="floor">ชั้น</span> </label>
+          <input id="floor" name="floor" type="number" min="-10" max="200" placeholder="เช่น 12" data-i18n-ph="phFloor" />
         </div>
       </div>
 
-      <label for="viewType">วิว</label>
-      <input id="viewType" name="viewType" type="text" placeholder="เช่น วิวสระว่ายน้ำ" />
+      <label for="viewType"><span data-i18n="viewType">วิว</span> </label>
+      <input id="viewType" name="viewType" type="text" placeholder="เช่น วิวสระว่ายน้ำ" data-i18n-ph="phViewType" />
 
       <div class="row">
         <div>
-          <label for="bedrooms">ห้องนอน</label>
+          <label for="bedrooms"><span data-i18n="bedrooms">ห้องนอน</span> </label>
           <input id="bedrooms" name="bedrooms" type="number" min="0" required value="1" />
         </div>
         <div>
-          <label for="bathrooms">ห้องน้ำ</label>
+          <label for="bathrooms"><span data-i18n="bathrooms">ห้องน้ำ</span> </label>
           <input id="bathrooms" name="bathrooms" type="number" min="0" required value="1" />
         </div>
       </div>
 
-      <label for="sizeSqm">พื้นที่ตร.ม. <span class="opt">(ไม่จำเป็น)</span></label>
+      <label for="sizeSqm"><span data-i18n="sizeSqm">พื้นที่ตร.ม.</span> <span class="opt" data-i18n="optional">(ไม่จำเป็น)</span></label>
       <input id="sizeSqm" name="sizeSqm" type="number" min="0" step="0.01" />
 
-      <label for="monthlyRent">ค่าเช่า/เดือน (บาท)</label>
+      <label for="monthlyRent"><span data-i18n="monthlyRent">ค่าเช่า/เดือน (บาท)</span> </label>
       <input id="monthlyRent" name="monthlyRent" type="number" min="1000" step="100" required />
 
-      <label for="description">รายละเอียด</label>
-      <textarea id="description" name="description" placeholder="จุดเด่น ทำเล สภาพห้อง ฯลฯ"></textarea>
+      <label for="description"><span data-i18n="description">รายละเอียด</span> </label>
+      <textarea id="description" name="description" placeholder="จุดเด่น ทำเล สภาพห้อง ฯลฯ" data-i18n-ph="phDescription"></textarea>
 
-      <label for="amenities">สิ่งอำนวยความสะดวก <span class="opt">(คั่นด้วยจุลภาค)</span></label>
+      <label for="amenities"><span data-i18n="amenities">สิ่งอำนวยความสะดวก</span> <span class="opt" data-i18n="commaSeparated">(คั่นด้วยจุลภาค)</span></label>
       <input id="amenities" name="amenities" type="text" placeholder="wifi, pool, gym" />
 
-      <label for="availableFrom">วันที่ว่าง</label>
+      <label for="availableFrom"><span data-i18n="availableFrom">วันที่ว่าง</span> </label>
       <input id="availableFrom" name="availableFrom" type="date" />
 
-      <label for="address">ที่อยู่ <span class="opt">(ไม่จำเป็น)</span></label>
+      <label for="address"><span data-i18n="address">ที่อยู่</span> <span class="opt" data-i18n="optional">(ไม่จำเป็น)</span></label>
       <input id="address" name="address" type="text" />
 
-      <label for="photos">รูปภาพห้อง <span class="opt">(สูงสุด ${MAX_PHOTOS_PER_LISTING} รูป)</span></label>
+      <label for="photos"><span data-i18n="photos">รูปภาพห้อง</span> <span class="opt">(<span data-i18n="photosMaxHint">สูงสุด</span> ${MAX_PHOTOS_PER_LISTING} <span data-i18n="photosUnitHint">รูป</span>)</span></label>
       <input id="photos" name="photos" type="file" accept="image/*" multiple />
       <div id="photoCount" class="sub" style="margin:6px 0 0;"></div>
 
-      <button class="btn" id="submitBtn" type="submit">ส่งประกาศ</button>
+      <button class="btn" id="submitBtn" type="submit" data-i18n="submit">ส่งประกาศ</button>
     </form>
     <div id="status" class="status"></div>
   </div>
@@ -279,7 +293,7 @@ function renderListingHtml(liffId, submitUrl) {
     }
     function setLoading(on) {
       submitBtn.disabled = on;
-      submitBtn.textContent = on ? 'กำลังส่ง...' : 'ส่งประกาศ';
+      submitBtn.textContent = on ? t('submitting') : t('submit');
     }
 
     // Initialise LIFF and read the landlord's Line userId. Renders gracefully
@@ -288,7 +302,7 @@ function renderListingHtml(liffId, submitUrl) {
     // server rejects the submit with a clear message.
     (function init() {
       if (!LIFF_ID || typeof liff === 'undefined') {
-        showStatus('ควรเปิดฟอร์มนี้ในแอป Line ค่ะ', true);
+        showStatus(t('msgOpenInLine'), true);
         return;
       }
       liff.init({ liffId: LIFF_ID }).then(function () {
@@ -301,7 +315,7 @@ function renderListingHtml(liffId, submitUrl) {
           document.getElementById('lineUserId').value = p.userId;
         });
       }).catch(function (err) {
-        showStatus('เชื่อมต่อ Line ไม่สำเร็จ: ' + (err && err.message ? err.message : ''), true);
+        showStatus(t('msgLineFailed') + (err && err.message ? err.message : ''), true);
       });
     })();
 
@@ -312,6 +326,45 @@ function renderListingHtml(liffId, submitUrl) {
     // Injected from the server constant so the form's guard and the multer
     // limit can never disagree — they did, and the mismatch surfaced as a 500.
     var MAX_PHOTOS = ${MAX_PHOTOS_PER_LISTING};
+    var FORM_COPY = ${JSON.stringify(FORM_COPY)};
+    var LANG = (function () {
+      try { var v = localStorage.getItem('rm.lang'); return v === 'en' ? 'en' : 'th' } catch (e) { return 'th' }
+    })();
+    function t(k) { return (FORM_COPY[LANG] || FORM_COPY.th)[k] }
+
+    // Re-render every marked node. Driven off the same keys the inline script
+    // uses for its messages, so a label and the error about that field can't end
+    // up in different languages.
+    function applyLang() {
+      document.documentElement.lang = LANG;
+      document.title = t('title');
+      var nodes = document.querySelectorAll('[data-i18n]');
+      for (var i = 0; i < nodes.length; i++) {
+        var v = t(nodes[i].getAttribute('data-i18n'));
+        if (v != null) nodes[i].textContent = v;
+      }
+      var phs = document.querySelectorAll('[data-i18n-ph]');
+      for (var j = 0; j < phs.length; j++) {
+        var pv = t(phs[j].getAttribute('data-i18n-ph'));
+        if (pv != null) phs[j].setAttribute('placeholder', pv);
+      }
+      var btns = document.querySelectorAll('.langbtn');
+      for (var k = 0; k < btns.length; k++) {
+        btns[k].setAttribute('aria-pressed', String(btns[k].getAttribute('data-lang') === LANG));
+      }
+      // The photo-count line and the project dropdown are built at runtime, so
+      // they have to be regenerated rather than just re-labelled.
+      if (typeof refreshPhotoCount === 'function') refreshPhotoCount();
+      if (typeof fillProjects === 'function' && zoneSelect) fillProjects(zoneSelect.value);
+    }
+
+    document.addEventListener('click', function (e) {
+      var b = e.target.closest && e.target.closest('.langbtn');
+      if (!b) return;
+      LANG = b.getAttribute('data-lang') === 'en' ? 'en' : 'th';
+      try { localStorage.setItem('rm.lang', LANG) } catch (err) {}
+      applyLang();
+    });
 
     function toggleOther(sel, other, trigger) {
       var on = sel.value === trigger;
@@ -332,7 +385,7 @@ function renderListingHtml(liffId, submitUrl) {
       projectSelect.innerHTML = '';
       var first = document.createElement('option');
       first.value = '';
-      first.textContent = list.length ? '— เลือกโครงการ —' : '— พิมพ์ชื่อโครงการ —';
+      first.textContent = list.length ? t('optSelectProject') : t('optTypeProject');
       projectSelect.appendChild(first);
       list.forEach(function (name) {
         var o = document.createElement('option');
@@ -342,7 +395,7 @@ function renderListingHtml(liffId, submitUrl) {
       // Always offer a way out of the list: a zone we don't have on file, or a
       // brand-new building, must not be a dead end.
       var other = document.createElement('option');
-      other.value = 'อื่นๆ'; other.textContent = 'อื่นๆ — พิมพ์ชื่อเอง…';
+      other.value = 'อื่นๆ'; other.textContent = t('optOtherSpecify');
       projectSelect.appendChild(other);
       if (!list.length) { projectSelect.value = 'อื่นๆ'; }
       toggleOther(projectSelect, projectOther, 'อื่นๆ');
@@ -367,15 +420,16 @@ function renderListingHtml(liffId, submitUrl) {
     var photosInput = document.getElementById('photos');
     var photoCountEl = document.getElementById('photoCount');
     if (photosInput) {
-      photosInput.addEventListener('change', function () {
+      function refreshPhotoCount() {
         var n = photosInput.files ? photosInput.files.length : 0;
         if (!n) { photoCountEl.textContent = ''; return; }
         var over = n > MAX_PHOTOS;
         photoCountEl.textContent = over
-          ? 'เลือก ' + n + ' รูป — เกินกำหนด ' + MAX_PHOTOS + ' รูป กรุณาเลือกใหม่'
-          : 'เลือก ' + n + ' รูป';
+          ? t('photoPicked') + n + t('photoOver') + MAX_PHOTOS + t('photoReselect')
+          : t('photoPicked') + n + t('photoUnit');
         photoCountEl.style.color = over ? '#991B1B' : '#6B7280';
-      });
+      }
+      photosInput.addEventListener('change', refreshPhotoCount);
     }
 
     form.addEventListener('submit', function (e) {
@@ -387,7 +441,7 @@ function renderListingHtml(liffId, submitUrl) {
       // Stop here rather than uploading tens of megabytes that the server is
       // going to reject on the last file.
       if (photosInput && photosInput.files && photosInput.files.length > MAX_PHOTOS) {
-        showStatus('แนบรูปได้สูงสุด ' + MAX_PHOTOS + ' รูป (เลือกไว้ ' + photosInput.files.length + ' รูป)', true);
+        showStatus(t('photoMax') + MAX_PHOTOS + t('photoSelectedCount') + photosInput.files.length + t('photoCloseParen'), true);
         setLoading(false);
         return;
       }
@@ -395,7 +449,7 @@ function renderListingHtml(liffId, submitUrl) {
       if (fd.get('zone') === 'อื่นๆ') {
         var other = document.getElementById('zoneOther').value.trim();
         if (!other) {
-          showStatus('กรุณาระบุโซน / ทำเลของคุณ', true);
+          showStatus(t('msgNeedZone'), true);
           setLoading(false);
           return;
         }
@@ -406,7 +460,7 @@ function renderListingHtml(liffId, submitUrl) {
       if (fd.get('projectName') === 'อื่นๆ' || !fd.get('projectName')) {
         var proj = document.getElementById('projectNameOther').value.trim();
         if (!proj) {
-          showStatus('กรุณาเลือกหรือพิมพ์ชื่อโครงการ', true);
+          showStatus(t('msgNeedProject'), true);
           setLoading(false);
           return;
         }
@@ -426,17 +480,17 @@ function renderListingHtml(liffId, submitUrl) {
         .then(function (res) {
           if (!res.ok) {
             return res.json().then(function (body) {
-              throw new Error(body && body.message ? body.message : 'ส่งไม่สำเร็จ (รหัส ' + res.status + ')');
+              throw new Error(body && body.message ? body.message : t('msgFailedCode') + res.status + ')');
             });
           }
           return res.json();
         })
         .then(function () {
           form.style.display = 'none';
-          showStatus('ส่งสำเร็จค่ะ แอดมินจะตรวจสอบและอนุมัติให้ พออนุมัติแล้วห้องจะขึ้นบนเว็บทันที', false);
+          showStatus(t('msgSuccess'), false);
         })
         .catch(function (err) {
-          showStatus(err && err.message ? err.message : 'ส่งไม่สำเร็จ กรุณาลองใหม่อีกครั้ง', true);
+          showStatus(err && err.message ? err.message : t('msgFailed'), true);
           setLoading(false);
         });
     });
