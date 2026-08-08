@@ -2,6 +2,7 @@
 import { ZodError } from 'zod'
 import { AppError } from './AppError.js'
 import { logger } from '../logger.js'
+import { MAX_PHOTOS_PER_LISTING } from '../config.js'
 
 export function errorHandler() {
   // 4 args is intentional — Express detects this as the error handler
@@ -33,6 +34,20 @@ export function errorHandler() {
       status  = 400
       code    = 'BAD_JSON'
       message = 'รูปแบบ JSON ไม่ถูกต้อง'
+    } else if (err?.name === 'MulterError') {
+      // Upload limits are the CALLER's mistake, not a server fault, but multer
+      // throws a plain Error so everything landed here as a 500 — a landlord who
+      // attached too many photos got "ส่งไม่สำเร็จ (รหัส 500)" and no way to know
+      // that removing a photo would fix it.
+      status = 400
+      code   = err.code || 'UPLOAD_ERROR'
+      message = err.code === 'LIMIT_UNEXPECTED_FILE'
+        // Multer reports "too many files" as an unexpected field on the file
+        // that overflowed, so this is the count limit, not a wrong field name.
+        ? `แนบรูปได้สูงสุด ${MAX_PHOTOS_PER_LISTING} รูป กรุณาลบรูปบางส่วนแล้วส่งใหม่`
+        : err.code === 'LIMIT_FILE_SIZE'
+          ? 'ไฟล์รูปใหญ่เกินไป (สูงสุด 5 MB ต่อรูป) กรุณาย่อขนาดแล้วลองใหม่'
+          : 'อัปโหลดรูปไม่สำเร็จ กรุณาลองใหม่อีกครั้ง'
     }
 
     if (status >= 500) {

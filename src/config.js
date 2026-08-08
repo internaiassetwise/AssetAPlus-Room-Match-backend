@@ -159,3 +159,10 @@ export const PUBLIC_IMAGES_DIR = path.join(SERVER_ROOT, 'public', 'images')
 // Derived helpers
 export const isProd = config.NODE_ENV === 'production'
 export const isDev  = config.NODE_ENV === 'development'
+// Max photos per listing submission.
+//
+// Shared so the multer limit, the error message and the form's own guard cannot
+// disagree — they did: the route capped at 8 while the form advertised no limit,
+// so a landlord attaching 10 photos got a bare 500 with nothing to act on.
+// Matches the admin room form's MAX_PHOTOS.
+export const MAX_PHOTOS_PER_LISTING = 12

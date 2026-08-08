@@ -18,7 +18,7 @@ import { AppError }     from '../middleware/AppError.js'
 import { rateLimit }    from '../middleware/rateLimit.js'
 import { detectImageExt } from '../services/fileSignature.service.js'
 import { saveRoomPhoto } from '../services/roomPhotoStore.service.js'
-import { config } from '../config.js'
+import { config, MAX_PHOTOS_PER_LISTING } from '../config.js'
 import { logger } from '../logger.js'
 import * as landlords   from '../db/repositories/landlords.repo.js'
 import { findByName }   from '../db/repositories/zones.repo.js'
@@ -257,8 +257,9 @@ function renderListingHtml(liffId, submitUrl) {
       <label for="address">ที่อยู่ <span class="opt">(ไม่จำเป็น)</span></label>
       <input id="address" name="address" type="text" />
 
-      <label for="photos">รูปภาพห้อง <span class="opt">(เลือกได้หลายรูป)</span></label>
+      <label for="photos">รูปภาพห้อง <span class="opt">(สูงสุด ${MAX_PHOTOS_PER_LISTING} รูป)</span></label>
       <input id="photos" name="photos" type="file" accept="image/*" multiple />
+      <div id="photoCount" class="sub" style="margin:6px 0 0;"></div>
 
       <button class="btn" id="submitBtn" type="submit">ส่งประกาศ</button>
     </form>
@@ -308,6 +309,9 @@ function renderListingHtml(liffId, submitUrl) {
     // rather than fetched so the form still works on a flaky mobile connection
     // inside LINE; the list is short and changes rarely.
     var ZONE_PROJECTS = ${JSON.stringify(ZONE_PROJECTS)};
+    // Injected from the server constant so the form's guard and the multer
+    // limit can never disagree — they did, and the mismatch surfaced as a 500.
+    var MAX_PHOTOS = ${MAX_PHOTOS_PER_LISTING};
 
     function toggleOther(sel, other, trigger) {
       var on = sel.value === trigger;
@@ -357,11 +361,36 @@ function renderListingHtml(liffId, submitUrl) {
       });
     }
 
+    // Show the count as soon as photos are picked, and say when it is over the
+    // limit — before the upload, not after. Sending 10 photos used to mean
+    // waiting through the whole upload only to be told "รหัส 500".
+    var photosInput = document.getElementById('photos');
+    var photoCountEl = document.getElementById('photoCount');
+    if (photosInput) {
+      photosInput.addEventListener('change', function () {
+        var n = photosInput.files ? photosInput.files.length : 0;
+        if (!n) { photoCountEl.textContent = ''; return; }
+        var over = n > MAX_PHOTOS;
+        photoCountEl.textContent = over
+          ? 'เลือก ' + n + ' รูป — เกินกำหนด ' + MAX_PHOTOS + ' รูป กรุณาเลือกใหม่'
+          : 'เลือก ' + n + ' รูป';
+        photoCountEl.style.color = over ? '#991B1B' : '#6B7280';
+      });
+    }
+
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       setLoading(true);
       statusEl.className = 'status';
       var fd = new FormData(form);
+
+      // Stop here rather than uploading tens of megabytes that the server is
+      // going to reject on the last file.
+      if (photosInput && photosInput.files && photosInput.files.length > MAX_PHOTOS) {
+        showStatus('แนบรูปได้สูงสุด ' + MAX_PHOTOS + ' รูป (เลือกไว้ ' + photosInput.files.length + ' รูป)', true);
+        setLoading(false);
+        return;
+      }
       // When the user picks "อื่นๆ", swap in the free-text value they typed.
       if (fd.get('zone') === 'อื่นๆ') {
         var other = document.getElementById('zoneOther').value.trim();
@@ -602,7 +631,7 @@ liff.post('/ask/record',
 // Photos arrive as multipart/form-data field "photos" (max 10, images only).
 liff.post('/listing/submit',
   rateLimit({ windowMs: 10 * 60 * 1000, max: 10, message: 'ส่งประกาศบ่อยเกินไป กรุณารอสักครู่' }),
-  photoUpload.array('photos', 8), asyncHandler(async (req, res) => {
+  photoUpload.array('photos', MAX_PHOTOS_PER_LISTING), asyncHandler(async (req, res) => {
   // Verify the caller's Line identity SERVER-SIDE from the LIFF access token.
   // We must NOT trust a client-sent lineUserId — anyone could spoof it to file
   // listings (or spam the admin queue) as another user.
