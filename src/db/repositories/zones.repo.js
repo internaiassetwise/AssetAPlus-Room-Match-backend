@@ -7,7 +7,11 @@ export async function listActive() {
       z.id,
       z.slug,
       z.name_th,
+      -- name stays Thai so existing callers are unchanged; name_en is additive
+      -- for the language toggle. Falls back to Thai so a zone added without a
+      -- translation shows something readable rather than an empty option.
       z.name_th AS name,
+      COALESCE(z.name_en, z.name_th) AS name_en,
       (SELECT COUNT(*) FROM rooms WHERE zone_id = z.id AND status = 'available')::int AS count
     FROM zones z
     WHERE z.is_active = TRUE

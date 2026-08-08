@@ -31,6 +31,10 @@ export function rowToRoom(row) {
     availableFrom: row.available_from,
     address: row.address ?? null,
     zone: row.zone_name_th,
+    // English name for the same zone. The site's language toggle needs it,
+    // and the zones table has carried it since the first migration — it was
+    // simply never selected. Null-safe: older rows fall back to the Thai name.
+    zoneEn: row.zone_name_en || row.zone_name_th || null,
     zoneId: row.zone_id,
     image: row.image_url,
     amenities,

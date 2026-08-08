@@ -12,7 +12,7 @@ const SELECT_ROOM = `
     r.created_at, r.updated_at,
     r.created_by_line_user_id, r.approved_at, r.approved_by,
     r.project_name, r.room_code, r.building, r.floor, r.view_type, r.room_type, r.remark,
-    z.slug AS zone_slug, z.name_th AS zone_name_th,
+    z.slug AS zone_slug, z.name_th AS zone_name_th, z.name_en AS zone_name_en,
     (SELECT url FROM room_images WHERE room_id = r.id ORDER BY sort_order LIMIT 1) AS image_url
   FROM rooms r
   JOIN zones z ON z.id = r.zone_id
